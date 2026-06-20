@@ -1061,8 +1061,26 @@ export default function App() {
     try { await updateDoc(doc(db, "settings", "main"), { tabletMode: val }); } catch {}
   }, []);
 
-  // ── Firestore real-time listeners ───────────────────────────────────────────
+  // ── Firestore real-time listeners (only after auth) ─────────────────────────
+  const [authedUid, setAuthedUid] = useState(null);
+
   useEffect(() => {
+    // settings is public — always listen
+    const unsubSettings = onSnapshot(doc(db, "settings", "main"), (s) => {
+      if (s.exists()) {
+        setAdminPinState(String(s.data().adminPin || "200503"));
+        setTabletModeState(!!s.data().tabletMode);
+      }
+    });
+    return () => unsubSettings();
+  }, []);
+
+  useEffect(() => {
+    if (!authedUid) {
+      setTeachers([]); setClasses([]); setLessonPlans([]); setLogs([]); setAccounts([]);
+      setDataLoading(false);
+      return;
+    }
     let resolved = 0;
     const check = () => { if (++resolved >= 5) setDataLoading(false); };
     const timeout = setTimeout(() => setDataLoading(false), 8000);
@@ -1073,17 +1091,11 @@ export default function App() {
       onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "logs"),        (s) => { setLogs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "users"),       (s) => { setAccounts(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
-      onSnapshot(doc(db, "settings", "main"),   (s) => {
-        if (s.exists()) {
-          setAdminPinState(String(s.data().adminPin || "200503"));
-          setTabletModeState(!!s.data().tabletMode);
-        }
-      }),
     ];
 
     seedFirestoreIfEmpty().catch(console.error);
     return () => { clearTimeout(timeout); unsubs.forEach((u) => u()); };
-  }, []);
+  }, [authedUid]);
 
   // ── Firebase Auth listener ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1103,13 +1115,16 @@ export default function App() {
           }
         }
         if (profile) {
+          setAuthedUid(firebaseUser.uid);
           setSession({ accountId: firebaseUser.uid, teacherId: profile.teacherId, role: profile.role || "teacher" });
         } else {
           await signOut(auth);
+          setAuthedUid(null);
           setSession(null);
           notify("Email não registado. Peça ao administrador para o adicionar.");
         }
       } else {
+        setAuthedUid(null);
         setSession(null);
       }
       setAuthLoading(false);
@@ -1129,8 +1144,12 @@ export default function App() {
     if (authLoading || dataLoading) return;
     if (tabletMode && view === "login")                        { setView("choose_teacher"); return; }
     if (!tabletMode && view === "choose_teacher" && !session)  { setView("login"); return; }
-    if (session && view === "login")                           { setView("teacher_home"); setOriginView("teacher_home"); }
-  }, [authLoading, dataLoading, session, tabletMode, view]);
+    if (session && view === "login")                           { setView("teacher_home"); setOriginView("teacher_home"); return; }
+    // If on teacher_home but actingTeacher not found (teacherId mismatch), go to choose_teacher
+    if (session && view === "teacher_home" && !actingTeacher && teachers.length > 0) {
+      setView("choose_teacher");
+    }
+  }, [authLoading, dataLoading, session, tabletMode, view, actingTeacher, teachers]);
 
   // ── CRUD → Firestore ────────────────────────────────────────────────────────
   const onAdd = useCallback(async (col, data) => {
