@@ -15,6 +15,8 @@ import {
   signOut,
   onAuthStateChanged,
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
+  signInWithPopup,
 } from "firebase/auth";
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, setDoc,
@@ -572,6 +574,8 @@ const AdminDashboard = ({
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", role: "teacher" });
   const [accountError, setAccountError] = useState("");
+  const [editingAccountId, setEditingAccountId] = useState(null);
+  const [editAccount, setEditAccount] = useState({ teacherId: "", role: "teacher" });
 
   const filteredClasses = useMemo(() => {
     const st = searchTerm.toLowerCase();
@@ -876,7 +880,7 @@ const AdminDashboard = ({
               <div className="flex items-start gap-3">
                 <Info size={16} className="text-indigo-500 shrink-0 mt-0.5" />
                 <p className="text-[11px] font-bold text-slate-700 leading-relaxed">
-                  Contas via <span className="font-black">Firebase Auth</span>. Cada conta está ligada a um professor e tem acesso real à aplicação.
+                  Os professores <span className="font-black">criam a conta sozinhos</span> (email ou Google). Aqui você <span className="font-black">aprova o acesso</span> e atribui o cargo e o professor. Contas <span className="font-black">Pendentes</span> ainda não têm acesso.
                 </p>
               </div>
             </div>
@@ -943,20 +947,67 @@ const AdminDashboard = ({
             <div className="bg-white rounded-[32px] p-4 border divide-y shadow-sm">
               {accounts.length === 0 && <div className="p-6 text-sm text-slate-500 font-bold">Nenhuma conta registada ainda.</div>}
               {accounts.map((a) => (
-                <div key={a.id} className="py-5 flex items-center justify-between px-4">
-                  <div>
-                    <p className="font-black text-slate-800 leading-none">{a.name || "(sem nome)"}</p>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase mt-2 tracking-widest">
-                      {a.email}{a.role === "admin" ? " • ADMIN" : ""}{a.phone ? ` • ${a.phone}` : ""}
-                    </p>
-                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full mt-1 inline-block ${a.activated ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600"}`}>
-                      {a.activated ? "Ativo" : "Aguarda registo"}
-                    </span>
+                <div key={a.id} className="py-5 px-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-black text-slate-800 leading-none truncate">{a.name || "(sem nome)"}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase mt-2 tracking-widest truncate">
+                        {a.email}{a.role === "admin" ? " • ADMIN" : a.role === "teacher" ? " • PROFESSOR" : ""}{a.phone ? ` • ${a.phone}` : ""}
+                      </p>
+                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full mt-1 inline-block ${a.activated ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600"}`}>
+                        {a.activated ? "Ativo" : "Pendente"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button onClick={() => {
+                        if (editingAccountId === a.id) { setEditingAccountId(null); }
+                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", role: a.role || "teacher" }); }
+                      }} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 ${a.activated ? "bg-slate-100 text-slate-500" : "bg-indigo-600 text-white shadow"}`}>
+                        {a.activated ? "Editar" : "Aprovar"}
+                      </button>
+                      <button onClick={async () => window.confirm("Remover conta?") && (await onRemove("accounts", a.id))}
+                        className="text-slate-200 hover:text-red-500">
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
                   </div>
-                  <button onClick={async () => window.confirm("Remover conta?") && (await onRemove("accounts", a.id))}
-                    className="text-slate-200 hover:text-red-500">
-                    <Trash2 size={18} />
-                  </button>
+                  {editingAccountId === a.id && (
+                    <div className="mt-4 space-y-3 bg-slate-50 rounded-2xl p-4 border">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Cargo</p>
+                        <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
+                          value={editAccount.role} onChange={(e) => setEditAccount((p) => ({ ...p, role: e.target.value }))}>
+                          <option value="teacher">Professor</option>
+                          <option value="admin">Admin (Direção)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Professor associado</p>
+                        <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
+                          value={editAccount.teacherId} onChange={(e) => setEditAccount((p) => ({ ...p, teacherId: e.target.value }))}>
+                          <option value="">— nenhum —</option>
+                          {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                      </div>
+                      <button onClick={async () => {
+                        if (editAccount.role === "teacher" && !editAccount.teacherId) {
+                          notify("Escolha o professor associado para um cargo de Professor.");
+                          return;
+                        }
+                        const t = teachers.find((x) => x.id === editAccount.teacherId);
+                        await onUpdate("users", a.id, {
+                          role: editAccount.role || "teacher",
+                          teacherId: editAccount.teacherId || "",
+                          ...(t ? { name: t.name } : {}),
+                          activated: true,
+                        });
+                        setEditingAccountId(null);
+                        notify(a.activated ? "Conta atualizada!" : "Acesso aprovado!");
+                      }} className="w-full p-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] tracking-widest active:scale-95">
+                        {a.activated ? "Guardar alterações" : "Aprovar acesso"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1018,6 +1069,7 @@ export default function App() {
   // ── State ───────────────────────────────────────────────────────────────────
   const [authLoading,   setAuthLoading]   = useState(true);
   const [dataLoading,   setDataLoading]   = useState(true);
+  const [pendingApproval, setPendingApproval] = useState(null);
   const [view,          setView]          = useState("login");
   const [originView,    setOriginView]    = useState("teacher_home");
   const [teachers,      setTeachers]      = useState([]);
@@ -1106,31 +1158,46 @@ export default function App() {
         if (byUid.exists()) {
           profile = byUid.data();
         } else {
+          // Conta pré-registada por email (compatibilidade): migra para o UID.
           const q = query(collection(db, "users"), where("email", "==", firebaseUser.email));
           const res = await getDocs(q);
           if (!res.empty) {
-            profile = res.docs[0].data();
-            await setDoc(doc(db, "users", firebaseUser.uid), { ...profile, activated: true });
+            profile = { ...res.docs[0].data(), activated: true };
+            await setDoc(doc(db, "users", firebaseUser.uid), profile);
             await deleteDoc(res.docs[0].ref);
+          } else {
+            // Auto-registo: cria perfil pendente à espera de aprovação do admin.
+            profile = {
+              email: (firebaseUser.email || "").toLowerCase(),
+              name: firebaseUser.displayName || "",
+              phone: "",
+              role: "teacher",
+              teacherId: "",
+              activated: false,
+              createdAt: serverTimestamp(),
+            };
+            await setDoc(doc(db, "users", firebaseUser.uid), profile);
           }
         }
-        if (profile) {
+        if (profile.activated) {
+          setPendingApproval(null);
           setAuthedUid(firebaseUser.uid);
           setSession({ accountId: firebaseUser.uid, teacherId: profile.teacherId, role: profile.role || "teacher" });
         } else {
-          await signOut(auth);
+          // Conta criada mas ainda não aprovada — mostra ecrã de espera.
           setAuthedUid(null);
           setSession(null);
-          notify("Email não registado. Peça ao administrador para o adicionar.");
+          setPendingApproval(firebaseUser.email || "");
         }
       } else {
         setAuthedUid(null);
         setSession(null);
+        setPendingApproval(null);
       }
       setAuthLoading(false);
     });
     return unsub;
-  }, [notify]);
+  }, []);
 
   // ── Sync actingTeacher from session ────────────────────────────────────────
   useEffect(() => {
@@ -1194,6 +1261,22 @@ export default function App() {
     }
   }, [loginEmail, loginPassword]);
 
+  const handleGoogleLogin = useCallback(async () => {
+    setLoginLoading(true); setLoginError("");
+    try {
+      // O onAuthStateChanged trata do perfil: liga a conta ao email registado
+      // pelo administrador, ou faz signOut se o email não estiver registado.
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (err) {
+      if (err?.code !== "auth/popup-closed-by-user" &&
+          err?.code !== "auth/cancelled-popup-request") {
+        setLoginError("Não foi possível entrar com o Google.");
+      }
+    } finally {
+      setLoginLoading(false);
+    }
+  }, []);
+
   const handleLogout = useCallback(async () => {
     await signOut(auth);
     setActingTeacher(null);
@@ -1208,12 +1291,8 @@ export default function App() {
     if (signupPassword !== signupConfirm) return setSignupError("As senhas não coincidem.");
     setSignupLoading(true);
     try {
-      const q = query(collection(db, "users"), where("email", "==", signupEmail.trim().toLowerCase()));
-      const res = await getDocs(q);
-      if (res.empty) {
-        setSignupError("Email não encontrado. Peça ao administrador para o registar primeiro.");
-        return;
-      }
+      // Auto-registo: cria a conta. O perfil pendente e o ecrã de espera
+      // são tratados pelo onAuthStateChanged.
       await createUserWithEmailAndPassword(auth, signupEmail.trim().toLowerCase(), signupPassword);
       setSignupEmail(""); setSignupPassword(""); setSignupConfirm("");
     } catch (err) {
@@ -1282,6 +1361,35 @@ export default function App() {
     );
   }
 
+  // ── Pending approval view ────────────────────────────────────────────────────
+  if (pendingApproval) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+        {toast}
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-[56px] shadow-2xl p-12 border text-center space-y-6">
+            <div className="mx-auto w-20 h-20 rounded-full bg-amber-100 flex items-center justify-center shadow-inner">
+              <Clock size={36} className="text-amber-500" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-3xl font-black text-slate-900 tracking-tighter">Conta criada com sucesso!</h1>
+              <p className="text-slate-400 font-bold">Olá, <span className="text-slate-700 font-black">{pendingApproval}</span>!</p>
+            </div>
+            <div className="p-5 bg-amber-50 rounded-2xl border border-amber-200">
+              <p className="text-sm font-bold text-amber-700 leading-relaxed">
+                Aguarda que o administrador aprove o teu acesso e atribua o teu cargo.
+              </p>
+            </div>
+            <button onClick={async () => { await signOut(auth); setPendingApproval(null); setView("login"); }}
+              className="mx-auto px-8 py-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-slate-600 flex items-center justify-center gap-3 active:scale-95 hover:border-slate-200">
+              <LogOut size={18} /> Sair
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── Login view ──────────────────────────────────────────────────────────────
   if (view === "login") {
     return (
@@ -1330,6 +1438,23 @@ export default function App() {
                   {loginLoading && <Loader2 size={20} className="animate-spin" />}
                   Entrar
                 </button>
+
+                <div className="flex items-center gap-3 py-1">
+                  <div className="h-px flex-1 bg-slate-100" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">ou</span>
+                  <div className="h-px flex-1 bg-slate-100" />
+                </div>
+
+                <button onClick={handleGoogleLogin} disabled={loginLoading}
+                  className="w-full p-5 bg-white border-2 border-slate-100 rounded-[28px] font-black uppercase tracking-wider text-slate-700 shadow-sm active:scale-95 disabled:opacity-60 flex items-center justify-center gap-3 hover:border-slate-200">
+                  <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                  </svg>
+                  Continuar com o Google
+                </button>
               </div>
             )}
 
@@ -1337,7 +1462,7 @@ export default function App() {
               <div className="space-y-4 text-left">
                 <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
                   <p className="text-[11px] font-bold text-indigo-700 leading-relaxed">
-                    O administrador tem de registar o seu email primeiro. Depois crie a sua senha aqui.
+                    Crie a sua conta aqui. Depois é só aguardar que o administrador aprove o seu acesso e atribua o seu cargo.
                   </p>
                 </div>
                 <div className="relative">
