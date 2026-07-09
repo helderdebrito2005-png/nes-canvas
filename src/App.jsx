@@ -8,7 +8,7 @@ import {
   Activity, CheckSquare, Square, Mic2, Info, Clock, Tablet,
   UserCog, Mail, Phone,
   Repeat, Send, AlertTriangle, BarChart3, UserX,
-  Archive, ArchiveRestore,
+  Archive, ArchiveRestore, X,
 } from "lucide-react";
 
 import { auth, db } from "./firebase";
@@ -1831,10 +1831,13 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
 
   return (
     <>
-      <div className={`fixed inset-0 bg-slate-950/50 z-40 transition-opacity lg:hidden ${open ? "opacity-100" : "opacity-0 pointer-events-none"}`} onClick={onClose} />
-      <aside className={`fixed inset-y-0 left-0 w-72 bg-slate-900 text-white z-50 flex flex-col transform transition-transform lg:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
+      <div className={`fixed inset-0 bg-slate-950/50 z-40 transition-opacity ${open ? "opacity-100" : "opacity-0 pointer-events-none"}`} onClick={onClose} />
+      <aside className={`fixed inset-y-0 left-0 w-72 bg-slate-900 text-white z-50 flex flex-col transform transition-transform ${open ? "translate-x-0" : "-translate-x-full"}`}>
         {/* Logo */}
         <div className="px-5 py-6 border-b border-slate-700/60">
+          <div className="flex justify-end mb-2">
+            <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white" title="Fechar"><X size={18} /></button>
+          </div>
           <div className="bg-white rounded-2xl overflow-hidden shadow-sm">
             <div className="flex h-1.5"><div className="flex-1 bg-[#F2C230]" /><div className="flex-1 bg-[#E8811F]" /></div>
             <div className="px-4 py-3 text-center">
@@ -2153,6 +2156,18 @@ export default function App() {
     setView("login");
   }, []);
 
+  const sidebarNavigate = useCallback((v) => {
+    setSidebarOpen(false);
+    const teacherViews = ["teacher_home", "subs", "tuners", "tuner_dept"];
+    if (teacherViews.includes(v) && !actingTeacher) {
+      setView("choose_teacher");
+      notify("Escolha primeiro o professor.");
+      return;
+    }
+    if (["subs", "tuners", "tuner_dept"].includes(v)) setOriginView("teacher_home");
+    setView(v);
+  }, [actingTeacher, notify]);
+
   const handleSignup = useCallback(async () => {
     setSignupError("");
     if (!signupName.trim()) return setSignupError("Insira o seu nome.");
@@ -2409,6 +2424,18 @@ export default function App() {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
         {toast}<PinModal />
+        <Sidebar
+          open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+          session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
+          onNavigate={sidebarNavigate}
+          onOpenAdmin={() => { setSidebarOpen(false); setIsPinModalOpen(true); }}
+          onSwitchTeacher={() => { setSidebarOpen(false); setTeacherSearch(""); }}
+          onLogout={() => { setSidebarOpen(false); handleLogout(); }}
+        />
+        <button onClick={() => setSidebarOpen(true)}
+          className="fixed bottom-5 left-5 z-30 w-14 h-14 rounded-full bg-indigo-600 text-white shadow-2xl flex items-center justify-center active:scale-90" title="Menu">
+          <Layout size={22} />
+        </button>
         <div className="w-full max-w-md space-y-6">
           {canOpenAdmin && (
             <button onClick={() => setIsPinModalOpen(true)}
@@ -2487,19 +2514,19 @@ export default function App() {
       <Sidebar
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
-        onNavigate={(v) => { setSidebarOpen(false); if (["subs", "tuners", "tuner_dept"].includes(v)) setOriginView("teacher_home"); setView(v); }}
+        onNavigate={sidebarNavigate}
         onOpenAdmin={() => { setSidebarOpen(false); setIsPinModalOpen(true); }}
         onSwitchTeacher={() => { setSidebarOpen(false); setView("choose_teacher"); setTeacherSearch(""); }}
         onLogout={() => { setSidebarOpen(false); handleLogout(); }}
       />
 
-      {/* Mobile: floating button to open the sidebar */}
+      {/* Floating button to open the sidebar (minimized by default) */}
       <button onClick={() => setSidebarOpen(true)}
-        className="lg:hidden fixed bottom-5 left-5 z-30 w-14 h-14 rounded-full bg-slate-900 text-white shadow-2xl flex items-center justify-center active:scale-90" title="Menu">
+        className="fixed bottom-5 left-5 z-30 w-14 h-14 rounded-full bg-indigo-600 text-white shadow-2xl flex items-center justify-center active:scale-90" title="Menu">
         <Layout size={22} />
       </button>
 
-      <div className="lg:pl-72">
+      <div>
 
       {view === "teacher_home" && actingTeacher && (
         <TeacherHome
