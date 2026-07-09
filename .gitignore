@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 .env
 .claude/
+
+# Segredos de migração (nunca versionar)
+migration/service-account-*.json
+migration/users-export.json

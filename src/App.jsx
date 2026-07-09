@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Users, PlusCircle, History, ChevronRight, CheckCircle2,
   TrendingUp, TrendingDown, Calendar, LogOut, DollarSign,
@@ -7,6 +7,8 @@ import {
   KeyRound, Loader2, BookOpen, Map, UserCheck, Type, Bell,
   Activity, CheckSquare, Square, Mic2, Info, Clock, Tablet,
   UserCog, Mail, Phone,
+  Repeat, Send, AlertTriangle, BarChart3, UserX,
+  Archive, ArchiveRestore,
 } from "lucide-react";
 
 import { auth, db } from "./firebase";
@@ -33,6 +35,36 @@ const getYesterdayStr = () => {
   d.setDate(d.getDate() - 1);
   return d.toISOString().split("T")[0];
 };
+
+// ─── Substitutions helpers & constants ──────────────────────────────────────
+const SUB_TIMES = ["08:00", "09:10", "10:20", "12:00", "13:10", "14:20", "15:30", "16:45", "18:10", "19:20"];
+const SUB_BOOKS = [
+  "Book 1 — Part 1", "Book 1 — Part 2", "Book 2 — Part 1", "Book 2 — Part 2",
+  "Book 3 — Part 1", "Book 3 — Part 2", "Book 4 — Part 1", "Book 4 — Part 2",
+  "Book 5 — Part 1", "Book 5 — Part 2", "Book 6 — Part 1", "Book 6 — Part 2", "Book 7",
+];
+const SUB_LESSON_TYPES = ["Aula normal", "Aula de comunicação", "Prática oral", "Ditado", "Revisão", "Pré-teste", "Exame oral", "Exame escrito"];
+const SUB_REASONS = ["Médico / saúde", "Emergência familiar", "Pessoal", "Viagem de trabalho", "Outro"];
+
+const subWeekRange = () => {
+  const n = new Date(), d = n.getDay(), m = new Date(n);
+  m.setDate(n.getDate() - (d === 0 ? 6 : d - 1));
+  const s = new Date(m); s.setDate(m.getDate() + 6);
+  return [m.toISOString().split("T")[0], s.toISOString().split("T")[0]];
+};
+const fmtDatePt = (d) => { if (!d) return ""; const [y, m, dd] = d.split("-"); return `${dd}/${m}/${y}`; };
+const getYM = (d) => (d ? d.slice(0, 7) : "");
+const fmtMonthPt = (ym) => {
+  const [y, m] = ym.split("-");
+  const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  return `${names[parseInt(m, 10) - 1]} ${y}`;
+};
+const subInitials = (n) => (n || "??").split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+const openExternalUrl = (url) => { const w = window.open(url, "_blank", "noopener,noreferrer"); if (!w) window.location.href = url; };
+const TUNER_WEEKLY_PLAN_URL = "https://forms.gle/gxtmUQ6xF41YoLfg9";
+const TUNER_OBSERVATION_URL = "https://forms.gle/uPGFZLzxDbzjvqxA9";
+const twoHoursOk = (dv, tv) => { if (!dv || !tv) return true; return (new Date(dv + "T" + tv) - new Date()) / 60000 >= 120; };
+const fmtTS = (ts) => { if (!ts) return ""; try { return ts.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
 
 function openAttendance(cls, actingTeacher) {
   const params = new URLSearchParams();
@@ -91,11 +123,13 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
   if (!classObj || !lessonPlans?.length)
     return { lastEndPage: 0, status: "ON TRACK", statusLabel: "A CARREGAR...",
       colorClass: "text-slate-500 bg-slate-100 border-slate-200",
-      activeBlock: null, progressNote: "", dictationCount: 0, lastWord: "", lastLog: null };
+      activeBlock: null, progressNote: "", dictationCount: 0, lastWord: "", lastLog: null, planComplete: false };
 
   const plan = lessonPlans.find((p) => p.id === classObj.lessonPlanId);
+  const planStart = classObj.planStartDate || null;
   const classLogs = (logs || [])
     .filter((l) => l.classId === classId)
+    .filter((l) => !planStart || (l.date || "") >= planStart)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
   const lastLog = classLogs[classLogs.length - 1] || null;
@@ -106,7 +140,7 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
     return { lastEndPage, status: "ON TRACK", statusLabel: "SEM PLANO",
       colorClass: "text-slate-500 bg-slate-100 border-slate-200",
       activeBlock: null, progressNote: "", dictationCount,
-      lastWord: lastLog?.lastWord || "", lastLog };
+      lastWord: lastLog?.lastWord || "", lastLog, planComplete: false, noPlan: true };
 
   let activeBlock = plan.blocks.find((b) => {
     const s = parseInt(b.startPage || 0, 10);
@@ -147,6 +181,8 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
     colorClass = "text-blue-600 bg-blue-50 border-blue-100";
   }
 
+  const planLastPage = parseInt(plan.blocks[plan.blocks.length - 1].endPage || 0, 10) || 0;
+  const planComplete = lastEndPage > 0 && lastEndPage >= planLastPage;
   const pagesLeft   = Math.max(0, blockEnd - lastEndPage);
   const lessonsLeft = Math.max(0, expectedLessonsForBlock - lessonsInCurrentBlock);
   let progressNote = "";
@@ -155,7 +191,7 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
   else progressNote = `Atraso: faltam ${pagesLeft} páginas (aulas planeadas já usadas)`;
 
   return { lastEndPage, status, statusLabel, colorClass, activeBlock,
-    progressNote, dictationCount, lastWord: lastLog?.lastWord || "", lastLog };
+    progressNote, dictationCount, lastWord: lastLog?.lastWord || "", lastLog, planComplete, noPlan: false };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -174,7 +210,7 @@ const Badge = ({ status, label, colorClass }) => (
 const TeacherHome = ({
   actingTeacher, tabletMode, classes, logs, lessonPlans,
   setView, setSelectedClass, setOriginView,
-  onSwitchTeacher, onOpenAdmin, onExit, canOpenAdmin,
+  onSwitchTeacher, onOpenAdmin, onOpenSubs, onExit, canOpenAdmin, onSetClassPlan,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const myClasses = useMemo(() => {
@@ -182,6 +218,7 @@ const TeacherHome = ({
     const st = searchTerm.toLowerCase();
     return classes
       .filter((c) => c.teacherId === actingTeacher.id)
+      .filter((c) => c.active !== false)
       .filter((c) => c.name.toLowerCase().includes(st));
   }, [classes, actingTeacher, searchTerm]);
 
@@ -205,6 +242,9 @@ const TeacherHome = ({
             </div>
           </div>
           <div className="flex gap-2">
+            <button onClick={onOpenSubs} className="p-2 bg-indigo-50 text-indigo-600 rounded-full active:scale-90 transition-all shadow-sm" title="Substituições">
+              <Repeat size={20} />
+            </button>
             <button onClick={onSwitchTeacher} className="p-2 bg-slate-100 rounded-full active:scale-90 transition-all shadow-sm" title="Trocar Professor">
               <Users size={20} />
             </button>
@@ -267,6 +307,19 @@ const TeacherHome = ({
                   </div>
                 </div>
               </div>
+              {(prog.planComplete || prog.noPlan) && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 mb-4">
+                  <p className="text-[11px] font-black uppercase tracking-widest text-indigo-700 flex items-center gap-2">
+                    <BookOpen size={14} /> {prog.noPlan ? "Sem plano" : "Plano concluído 🎉"}
+                  </p>
+                  <p className="text-[11px] font-bold text-indigo-500 mt-1 mb-2">Escolher o próximo plano para esta turma:</p>
+                  <select className="w-full p-3 bg-white border-2 border-indigo-100 rounded-xl font-bold text-sm outline-none"
+                    value="" onChange={(e) => { if (e.target.value) onSetClassPlan(cls.id, e.target.value); }}>
+                    <option value="">Selecionar plano...</option>
+                    {lessonPlans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="flex gap-2">
                 <button
                   disabled={alreadyLoggedToday}
@@ -560,14 +613,20 @@ const AdminDashboard = ({
   notify, setView, setSelectedClass, setOriginView,
   adminPin, setAdminPin, setTabletMode,
   onAdd, onUpdate, onRemove,
+  subs = [], onDeleteSub,
 }) => {
   const [tab, setTab] = useState("classes");
+  const [subDirTab, setSubDirTab] = useState("records");
+  const [subFilDate, setSubFilDate] = useState("all");
+  const [subFilStatus, setSubFilStatus] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddingCls, setIsAddingCls] = useState(false);
   const [newCls, setNewCls] = useState({ name: "", room: "", lessonPlanId: "", teacherId: "" });
   const [isAddingTeacher, setIsAddingTeacher] = useState(false);
   const [newTeacher, setNewTeacher] = useState({ name: "", rate: 2000 });
   const [editingTeacherId, setEditingTeacherId] = useState(null);
+  const [editingClassId, setEditingClassId] = useState(null);
+  const [editCls, setEditCls] = useState({ name: "", room: "", teacherId: "", lessonPlanId: "" });
   const [isEditingPlan, setIsEditingPlan] = useState(false);
   const [activePlan, setActivePlan] = useState({ name: "", blocks: [] });
   const [newPinInput, setNewPinInput] = useState("");
@@ -575,7 +634,7 @@ const AdminDashboard = ({
   const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", role: "teacher" });
   const [accountError, setAccountError] = useState("");
   const [editingAccountId, setEditingAccountId] = useState(null);
-  const [editAccount, setEditAccount] = useState({ teacherId: "", role: "teacher" });
+  const [editAccount, setEditAccount] = useState({ teacherId: "", role: "teacher", name: "" });
 
   const filteredClasses = useMemo(() => {
     const st = searchTerm.toLowerCase();
@@ -584,7 +643,7 @@ const AdminDashboard = ({
 
   const missingLogsYesterday = useMemo(() => {
     const yesterday = getYesterdayStr();
-    return classes.filter((cls) => !logs.some((l) => l.classId === cls.id && l.date === yesterday));
+    return classes.filter((cls) => cls.active !== false && !logs.some((l) => l.classId === cls.id && l.date === yesterday));
   }, [classes, logs]);
 
   const totalPlanLessons = useMemo(
@@ -638,6 +697,7 @@ const AdminDashboard = ({
             { id: "plans",    label: "Planos",     icon: BookOpen  },
             { id: "payroll",  label: "Folha",      icon: DollarSign},
             { id: "accounts", label: "Contas",     icon: UserCog   },
+            { id: "subs",     label: "Substituições", icon: Repeat },
             { id: "settings", label: "PIN/Tablet", icon: KeyRound  },
           ].map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -658,6 +718,18 @@ const AdminDashboard = ({
               <input className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 outline-none shadow-sm font-bold text-sm"
                 placeholder="Pesquisar Turma..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
+            {(() => {
+              const activeAll = classes.filter((c) => c.active !== false);
+              let nBehind = 0, nOn = 0, nAhead = 0;
+              activeAll.forEach((c) => { const s = calculateProgress(c.id, logs, lessonPlans, c).status; if (s === "BEHIND") nBehind++; else if (s === "AHEAD") nAhead++; else nOn++; });
+              return (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-white rounded-2xl p-4 border text-center shadow-sm"><p className="text-2xl font-black text-red-500">{nBehind}</p><p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-1">Atrasadas</p></div>
+                  <div className="bg-white rounded-2xl p-4 border text-center shadow-sm"><p className="text-2xl font-black text-green-600">{nOn}</p><p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-1">Em dia</p></div>
+                  <div className="bg-white rounded-2xl p-4 border text-center shadow-sm"><p className="text-2xl font-black text-blue-600">{nAhead}</p><p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-1">Adiantadas</p></div>
+                </div>
+              );
+            })()}
             <button onClick={() => setIsAddingCls(true)}
               className="w-full p-5 bg-indigo-600 text-white rounded-[24px] font-black uppercase tracking-wider shadow-lg active:scale-95 flex items-center justify-center gap-2">
               <Plus size={20} /> Nova Turma
@@ -689,25 +761,98 @@ const AdminDashboard = ({
                 </button>
               </div>
             )}
-            {filteredClasses.map((cls) => (
-              <div key={cls.id} className="bg-white p-5 rounded-[32px] border flex items-center justify-between text-left shadow-sm">
-                <div onClick={() => { setSelectedClass(cls); setOriginView("admin_home"); setView("class_history"); }}
-                  className="cursor-pointer flex-1">
-                  <p className="font-black text-slate-800 text-xl tracking-tighter leading-none">{cls.name}</p>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
-                    {teachers.find((t) => t.id === cls.teacherId)?.name || "S/D"} • Sala {cls.room}
-                  </p>
+            {filteredClasses.filter((c) => c.active !== false).map((cls) => {
+              const prog = calculateProgress(cls.id, logs, lessonPlans, cls);
+              return (
+              <div key={cls.id} className="bg-white p-5 rounded-[32px] border text-left shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div onClick={() => { setSelectedClass(cls); setOriginView("admin_home"); setView("class_history"); }}
+                    className="cursor-pointer flex-1 min-w-0">
+                    <p className="font-black text-slate-800 text-xl tracking-tighter leading-none truncate">{cls.name}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
+                      {teachers.find((t) => t.id === cls.teacherId)?.name || "S/D"} • Sala {cls.room} • {lessonPlans.find((p) => p.id === cls.lessonPlanId)?.name || "sem plano"}
+                    </p>
+                    <div className="mt-2 inline-flex"><Badge status={prog.status} label={prog.statusLabel} colorClass={prog.colorClass} /></div>
+                  </div>
+                  <button onClick={() => openAttendance(cls, { id: cls.teacherId })}
+                    className="p-2 rounded-xl bg-slate-900 text-white mr-2 active:scale-90" title="Presenças">
+                    <Users size={18} />
+                  </button>
+                  <button onClick={() => {
+                    if (editingClassId === cls.id) { setEditingClassId(null); }
+                    else { setEditingClassId(cls.id); setEditCls({ name: cls.name || "", room: cls.room || "", teacherId: cls.teacherId || "", lessonPlanId: cls.lessonPlanId || "" }); }
+                  }} className="p-2 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 active:scale-90 mr-2" title="Editar">
+                    <Edit3 size={18} />
+                  </button>
+                  <button onClick={async () => window.confirm(`Arquivar "${cls.name}"? Deixa de aparecer ao professor, mas o histórico é mantido.`) && (await onUpdate("classes", cls.id, { active: false }))}
+                    className="p-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 active:scale-90 mr-2" title="Arquivar">
+                    <Archive size={18} />
+                  </button>
+                  <button onClick={async () => window.confirm(`Eliminar "${cls.name}" definitivamente? O histórico desta turma perde-se.`) && (await onRemove("classes", cls.id))}
+                    className="text-slate-200 hover:text-red-500 p-2" title="Eliminar">
+                    <Trash2 size={20} />
+                  </button>
                 </div>
-                <button onClick={() => openAttendance(cls, { id: cls.teacherId })}
-                  className="p-2 rounded-xl bg-slate-900 text-white mr-2 active:scale-90">
-                  <Users size={18} />
-                </button>
-                <button onClick={async () => window.confirm("Eliminar?") && (await onRemove("classes", cls.id))}
-                  className="text-slate-200 hover:text-red-500 p-2">
-                  <Trash2 size={20} />
-                </button>
+                {editingClassId === cls.id && (
+                  <div className="mt-4 space-y-3 bg-slate-50 rounded-2xl p-4 border">
+                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Nome</span>
+                      <input className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.name} onChange={(e) => setEditCls((p) => ({ ...p, name: e.target.value }))} /></div>
+                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Sala</span>
+                      <input className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.room} onChange={(e) => setEditCls((p) => ({ ...p, room: e.target.value }))} /></div>
+                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Professor</span>
+                      <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.teacherId} onChange={(e) => setEditCls((p) => ({ ...p, teacherId: e.target.value }))}>
+                        <option value="">— nenhum —</option>{teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select></div>
+                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Plano de aulas</span>
+                      <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.lessonPlanId} onChange={(e) => setEditCls((p) => ({ ...p, lessonPlanId: e.target.value }))}>
+                        <option value="">— sem plano —</option>{lessonPlans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select></div>
+                    <button onClick={async () => {
+                      const planChanged = (editCls.lessonPlanId || "") !== (cls.lessonPlanId || "");
+                      await onUpdate("classes", cls.id, {
+                        name: editCls.name.trim() || cls.name, room: editCls.room.trim(),
+                        teacherId: editCls.teacherId, lessonPlanId: editCls.lessonPlanId,
+                        ...(planChanged ? { planStartDate: getTodayStr() } : {}),
+                      });
+                      setEditingClassId(null);
+                      notify(planChanged ? "Turma atualizada. Progresso recomeça para o novo plano." : "Turma atualizada.");
+                    }} className="w-full p-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] tracking-widest active:scale-95">
+                      Guardar alterações
+                    </button>
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
+
+            {filteredClasses.some((c) => c.active === false) && (
+              <div className="pt-2">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2 mt-4">
+                  <Archive size={14} /> Arquivadas <span className="flex-1 h-px bg-slate-200" />
+                </div>
+                <div className="space-y-3">
+                  {filteredClasses.filter((c) => c.active === false).map((cls) => (
+                    <div key={cls.id} className="bg-slate-50 p-5 rounded-[32px] border flex items-center justify-between text-left">
+                      <div onClick={() => { setSelectedClass(cls); setOriginView("admin_home"); setView("class_history"); }}
+                        className="cursor-pointer flex-1 min-w-0">
+                        <p className="font-black text-slate-500 text-xl tracking-tighter leading-none truncate">{cls.name}</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
+                          {teachers.find((t) => t.id === cls.teacherId)?.name || "S/D"} • Sala {cls.room} • arquivada
+                        </p>
+                      </div>
+                      <button onClick={async () => await onUpdate("classes", cls.id, { active: true })}
+                        className="p-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 active:scale-90 mr-2" title="Reativar">
+                        <ArchiveRestore size={18} />
+                      </button>
+                      <button onClick={async () => window.confirm("Eliminar definitivamente? O histórico desta turma perde-se.") && (await onRemove("classes", cls.id))}
+                        className="text-slate-300 hover:text-red-500 p-2" title="Eliminar">
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -917,6 +1062,8 @@ const AdminDashboard = ({
                 <select className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
                   value={newAccount.role} onChange={(e) => setNewAccount({ ...newAccount, role: e.target.value })}>
                   <option value="teacher">Professor</option>
+                  <option value="tuner">Tuner</option>
+                  <option value="assistant">Assistente</option>
                   <option value="admin">Admin (Direção)</option>
                 </select>
                 {accountError && <p className="text-red-500 text-sm font-bold">{accountError}</p>}
@@ -952,7 +1099,7 @@ const AdminDashboard = ({
                     <div className="min-w-0">
                       <p className="font-black text-slate-800 leading-none truncate">{a.name || "(sem nome)"}</p>
                       <p className="text-[10px] font-bold text-slate-400 uppercase mt-2 tracking-widest truncate">
-                        {a.email}{a.role === "admin" ? " • ADMIN" : a.role === "teacher" ? " • PROFESSOR" : ""}{a.phone ? ` • ${a.phone}` : ""}
+                        {a.email}{a.role === "admin" ? " • ADMIN" : a.role === "tuner" ? " • TUNER" : a.role === "teacher" ? " • PROFESSOR" : ""}{a.phone ? ` • ${a.phone}` : ""}
                       </p>
                       <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full mt-1 inline-block ${a.activated ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600"}`}>
                         {a.activated ? "Ativo" : "Pendente"}
@@ -961,7 +1108,7 @@ const AdminDashboard = ({
                     <div className="flex items-center gap-2 shrink-0">
                       <button onClick={() => {
                         if (editingAccountId === a.id) { setEditingAccountId(null); }
-                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", role: a.role || "teacher" }); }
+                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", role: a.role || "teacher", name: a.name || "" }); }
                       }} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 ${a.activated ? "bg-slate-100 text-slate-500" : "bg-indigo-600 text-white shadow"}`}>
                         {a.activated ? "Editar" : "Aprovar"}
                       </button>
@@ -974,31 +1121,49 @@ const AdminDashboard = ({
                   {editingAccountId === a.id && (
                     <div className="mt-4 space-y-3 bg-slate-50 rounded-2xl p-4 border">
                       <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Nome</p>
+                        <input className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
+                          placeholder="Nome da pessoa"
+                          value={editAccount.name} onChange={(e) => setEditAccount((p) => ({ ...p, name: e.target.value }))} />
+                      </div>
+                      <div>
                         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Cargo</p>
                         <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
                           value={editAccount.role} onChange={(e) => setEditAccount((p) => ({ ...p, role: e.target.value }))}>
                           <option value="teacher">Professor</option>
+                          <option value="tuner">Tuner</option>
+                          <option value="assistant">Assistente</option>
                           <option value="admin">Admin (Direção)</option>
                         </select>
                       </div>
-                      <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Professor associado</p>
-                        <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
-                          value={editAccount.teacherId} onChange={(e) => setEditAccount((p) => ({ ...p, teacherId: e.target.value }))}>
-                          <option value="">— nenhum —</option>
-                          {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                        </select>
-                      </div>
+                      {editAccount.role !== "admin" && (
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Professor associado</p>
+                          <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
+                            value={editAccount.teacherId} onChange={(e) => setEditAccount((p) => ({ ...p, teacherId: e.target.value }))}>
+                            <option value="">— escolher —</option>
+                            <option value="__new__">➕ Criar novo professor (com o nome acima)</option>
+                            {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </select>
+                        </div>
+                      )}
                       <button onClick={async () => {
-                        if (editAccount.role === "teacher" && !editAccount.teacherId) {
-                          notify("Escolha o professor associado para um cargo de Professor.");
-                          return;
+                        const name = (editAccount.name || "").trim();
+                        if (!name) { notify("Escreva o nome."); return; }
+                        let teacherId = editAccount.teacherId;
+                        if (editAccount.role !== "admin") {
+                          if (!teacherId) { notify("Escolha ou crie o professor associado."); return; }
+                          if (teacherId === "__new__") {
+                            const ref = await onAdd("teachers", { name, rate: 2000, active: true });
+                            teacherId = ref?.id || "";
+                          }
+                        } else {
+                          teacherId = "";
                         }
-                        const t = teachers.find((x) => x.id === editAccount.teacherId);
                         await onUpdate("users", a.id, {
                           role: editAccount.role || "teacher",
-                          teacherId: editAccount.teacherId || "",
-                          ...(t ? { name: t.name } : {}),
+                          teacherId,
+                          name,
                           activated: true,
                         });
                         setEditingAccountId(null);
@@ -1013,6 +1178,142 @@ const AdminDashboard = ({
             </div>
           </div>
         )}
+
+        {/* ── SUBSTITUTIONS (director) ── */}
+        {tab === "subs" && (() => {
+          const td = getTodayStr();
+          const [wS, wE] = subWeekRange();
+          const total = subs.length;
+          const todayCount = subs.filter((r) => r.date === td).length;
+          const unconf = subs.filter((r) => !r.confirmed && r.date >= td).length;
+          const weekCount = subs.filter((r) => r.date >= wS && r.date <= wE).length;
+
+          let recs = [...subs];
+          if (subFilDate === "today") recs = recs.filter((r) => r.date === td);
+          else if (subFilDate === "week") recs = recs.filter((r) => r.date >= wS && r.date <= wE);
+          else if (subFilDate === "past") recs = recs.filter((r) => r.date < td);
+          if (subFilStatus === "pending") recs = recs.filter((r) => !r.confirmed);
+          else if (subFilStatus === "confirmed") recs = recs.filter((r) => r.confirmed);
+          recs.sort((a, b) => b.date.localeCompare(a.date) || a.time.localeCompare(b.time));
+
+          const subCount = {}, absCount = {}, riskCount = {}, byMonth = {}, bonusMap = {};
+          subs.forEach((r) => {
+            subCount[r.subName] = (subCount[r.subName] || 0) + 1;
+            absCount[r.absentName] = (absCount[r.absentName] || 0) + 1;
+            if (r.date < td && !r.confirmed) riskCount[r.subName] = (riskCount[r.subName] || 0) + 1;
+            const ym = getYM(r.date);
+            if (!byMonth[ym]) byMonth[ym] = { total: 0, confirmed: 0, pending: 0 };
+            byMonth[ym].total++; r.confirmed ? byMonth[ym].confirmed++ : byMonth[ym].pending++;
+            if (r.date < td && !r.confirmed) { if (!bonusMap[r.subName]) bonusMap[r.subName] = {}; bonusMap[r.subName][ym] = (bonusMap[r.subName][ym] || 0) + 1; }
+          });
+          const bar = (obj, color) => {
+            const e = Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 8);
+            const mx = e[0] ? e[0][1] : 1;
+            if (!e.length) return <div className="text-center py-4 text-slate-400 font-bold text-sm">Sem dados.</div>;
+            return e.map(([name, c]) => (
+              <div key={name} className="flex items-center gap-2 my-1.5">
+                <div className="text-[12px] font-bold text-slate-700 w-28 truncate" title={name}>{name}</div>
+                <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full ${color}`} style={{ width: `${Math.round(c / mx * 100)}%` }} /></div>
+                <div className="text-[11px] font-black text-slate-500 w-6 text-right">{c}</div>
+              </div>
+            ));
+          };
+          const months = Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0]));
+          const atRisk = Object.entries(bonusMap).filter(([, m]) => Object.values(m).some((c) => c >= 3));
+          const selCls = "px-3 py-2 bg-slate-50 border rounded-xl font-bold text-sm";
+
+          return (
+            <div className="space-y-4 text-left">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[["Total", total, "text-indigo-600"], ["Hoje", todayCount, "text-emerald-600"], ["Por confirmar", unconf, "text-amber-600"], ["Esta semana", weekCount, "text-red-500"]].map(([l, n, c]) => (
+                  <div key={l} className="bg-white rounded-[24px] p-5 border shadow-sm text-center">
+                    <p className={`text-3xl font-black ${c}`}>{n}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{l}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                {[["records", "Registos"], ["stats", "Estatísticas"], ["monthly", "Mensal"]].map(([k, l]) => (
+                  <button key={k} onClick={() => setSubDirTab(k)}
+                    className={`px-4 py-2 rounded-2xl text-xs font-black uppercase tracking-widest ${subDirTab === k ? "bg-indigo-600 text-white shadow" : "bg-white text-slate-500 border"}`}>{l}</button>
+                ))}
+              </div>
+
+              {subDirTab === "records" && (
+                <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                  <div className="flex gap-2 mb-4">
+                    <select className={selCls} value={subFilDate} onChange={(e) => setSubFilDate(e.target.value)}>
+                      <option value="all">Todas as datas</option><option value="today">Hoje</option><option value="week">Esta semana</option><option value="past">Passadas</option>
+                    </select>
+                    <select className={selCls} value={subFilStatus} onChange={(e) => setSubFilStatus(e.target.value)}>
+                      <option value="all">Todos os estados</option><option value="pending">Por confirmar</option><option value="confirmed">Confirmadas</option>
+                    </select>
+                  </div>
+                  {recs.length ? <div className="divide-y">{recs.map((r) => (
+                    <div key={r.id} className="py-4 flex items-start gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${r.date === td ? "bg-indigo-50 text-indigo-600 border-indigo-200" : r.date < td ? "bg-slate-100 text-slate-500 border-slate-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>{r.date === td ? "Hoje" : fmtDatePt(r.date)}</span>
+                          <span className="text-[11px] font-bold text-slate-400">{r.time}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${r.confirmed ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{r.confirmed ? "Confirmado" : "Por confirmar"}</span>
+                        </div>
+                        <p className="font-black text-slate-800 text-sm mt-1">{r.absentName} <span className="font-medium text-slate-400">→ {r.subName}</span></p>
+                        <p className="text-[11px] font-bold text-slate-400">{r.room} · {r.book} · p.{r.page} · {r.lessontype} · <span className="italic">{r.reason}</span></p>
+                        {r.lessonnotes && <p className="text-[11px] text-slate-400 italic mt-0.5">"{r.lessonnotes}"</p>}
+                        {r.confirmed && r.confirmedAt && <p className="text-[10px] text-emerald-600 font-bold mt-0.5">Confirmado às {fmtTS(r.confirmedAt)}</p>}
+                      </div>
+                      <button onClick={async () => window.confirm("Remover este registo?") && (await onDeleteSub(r.id))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 size={16} /></button>
+                    </div>
+                  ))}</div> : <div className="text-center py-6 text-slate-400 font-bold text-sm">Nenhum registo corresponde ao filtro.</div>}
+                </div>
+              )}
+
+              {subDirTab === "stats" && (
+                <div className="space-y-4">
+                  <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                    <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><UserCheck size={14} /> Top substitutos</div>{bar(subCount, "bg-indigo-500")}
+                  </div>
+                  <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                    <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><UserX size={14} /> Mais ausências</div>{bar(absCount, "bg-amber-500")}
+                  </div>
+                  <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                    <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><AlertTriangle size={14} /> Risco de pontualidade (não confirmadas passadas)</div>
+                    {Object.keys(riskCount).length ? bar(riskCount, "bg-red-500") : <div className="text-center py-4 text-emerald-600 font-bold text-sm"><CheckCircle2 size={18} className="mx-auto mb-1" />Sem problemas de pontualidade.</div>}
+                  </div>
+                </div>
+              )}
+
+              {subDirTab === "monthly" && (
+                <div className="space-y-4">
+                  <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                    <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Calendar size={14} /> Resumo mês a mês</div>
+                    {months.length ? months.map(([ym, d]) => (
+                      <div key={ym} className="flex items-center justify-between py-2 border-b last:border-0 flex-wrap gap-2">
+                        <span className="font-black text-sm text-slate-800">{fmtMonthPt(ym)}</span>
+                        <div className="flex gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-indigo-50 text-indigo-600 uppercase">{d.total} total</span>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-50 text-emerald-700 uppercase">{d.confirmed} confirmadas</span>
+                          {d.pending > 0 && <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-amber-50 text-amber-700 uppercase">{d.pending} pendentes</span>}
+                        </div>
+                      </div>
+                    )) : <div className="text-center py-6 text-slate-400 font-bold text-sm">Sem registos.</div>}
+                  </div>
+                  <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                    <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-1"><DollarSign size={14} /> Risco de bónus</div>
+                    <p className="text-[11px] text-slate-400 font-bold mb-3">Professores com 3+ confirmações falhadas num mês arriscam o bónus de 45%.</p>
+                    {atRisk.length ? atRisk.map(([name, m]) => (
+                      <div key={name} className="py-2 border-b last:border-0">
+                        <p className="font-black text-sm text-slate-800">{name}</p>
+                        <div className="flex gap-1 flex-wrap mt-1">{Object.entries(m).filter(([, c]) => c >= 3).map(([ym, c]) => <span key={ym} className="px-2 py-0.5 rounded-full text-[9px] font-black bg-red-50 text-red-600 uppercase">{fmtMonthPt(ym)}: {c}x</span>)}</div>
+                      </div>
+                    )) : <div className="text-center py-4 text-emerald-600 font-bold text-sm"><CheckCircle2 size={18} className="mx-auto mb-1" />Nenhum professor em risco.</div>}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ── SETTINGS ── */}
         {tab === "settings" && (
@@ -1062,6 +1363,505 @@ const AdminDashboard = ({
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SUBSTITUTIONS  —  teacher-facing (Pedir / Confirmar / Quadro)
+// ═══════════════════════════════════════════════════════════════════════════════
+const Substitutions = ({ actingTeacher, teachers, subs, onSubmitSub, onConfirmSub, notify, onBack }) => {
+  const [tab, setTab] = useState("request");
+  const [form, setForm] = useState({
+    date: getTodayStr(), time: "", room: "", book: "", page: "",
+    lessontype: "", lessonnotes: "", subTeacherId: "", reason: "",
+  });
+  const [formError, setFormError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState("");
+  const [agreed, setAgreed] = useState({});
+
+  const meId = actingTeacher?.id;
+  const meName = actingTeacher?.name || "";
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const myPending = subs.filter((r) => r.subTeacherId === meId && !r.confirmed);
+  const [weekStart, weekEnd] = subWeekRange();
+  const td = getTodayStr();
+
+  const submit = async () => {
+    setFormError("");
+    const { date, time, room, book, page, lessontype, lessonnotes, subTeacherId, reason } = form;
+    if (!date || !time || !room || !book || !page || !lessontype || !lessonnotes || !subTeacherId || !reason) {
+      setFormError("Preencha todos os campos obrigatórios."); return;
+    }
+    if (!twoHoursOk(date, time)) { setFormError("Tem de ser pelo menos 2 horas antes da hora da aula."); return; }
+    const dup = subs.find((r) => r.absentTeacherId === meId && r.date === date && r.time === time);
+    if (dup) { setFormError(`Já existe um pedido seu para ${fmtDatePt(date)} às ${time} (substituto: ${dup.subName}).`); return; }
+    const subName = teachers.find((t) => t.id === subTeacherId)?.name || "";
+    setSubmitting(true);
+    try {
+      await onSubmitSub({
+        absentTeacherId: meId, absentName: meName,
+        subTeacherId, subName,
+        date, time, room, book, page, lessontype, lessonnotes, reason,
+        submittedByTeacherId: meId,
+      });
+      setForm({ date: getTodayStr(), time: "", room: "", book: "", page: "", lessontype: "", lessonnotes: "", subTeacherId: "", reason: "" });
+      notify(`Pedido enviado. ${subName} foi avisado(a).`);
+      setTab("board");
+    } catch (e) {
+      setFormError("Erro ao enviar: " + (e?.message || e));
+    } finally { setSubmitting(false); }
+  };
+
+  const confirm = async (r) => {
+    if (!agreed[r.id]) { notify("Confirme primeiro o compromisso de pontualidade."); return; }
+    try { await onConfirmSub(r.id); notify("Confirmado. Seja pontual!"); }
+    catch (e) { notify("Erro: " + (e?.message || e)); }
+  };
+
+  const inputCls = "w-full bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 outline-none font-bold text-sm focus:border-indigo-400";
+  const labelCls = "text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block";
+
+  const SubCard = (r) => (
+    <div key={r.id} className="bg-white rounded-[24px] p-5 border border-slate-100 shadow-sm">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-black text-xs shrink-0">{subInitials(r.subName)}</div>
+        <div className="flex-1 min-w-0">
+          <p className="font-black text-slate-800 leading-none">{r.subName}</p>
+          <p className="text-[11px] font-bold text-slate-400 mt-1">cobre {r.absentName} · {fmtDatePt(r.date)} às {r.time} · {r.room}</p>
+        </div>
+        <span className="px-2 py-1 rounded-full text-[9px] font-black bg-amber-50 text-amber-700 border border-amber-200 uppercase">Pendente</span>
+      </div>
+      <p className="text-[12px] text-slate-500 font-bold mt-3 pl-1">{r.book} · pág. {r.page} · {r.lessontype}<br /><span className="italic text-slate-400 font-medium">{r.lessonnotes}</span></p>
+      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 mt-3 flex gap-2 text-[12px] text-amber-800 font-bold leading-relaxed">
+        <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+        <span><strong>A pontualidade é obrigatória.</strong> Tem de chegar a horas — nem um minuto atrasado. Chegar atrasado 3 vezes num mês significa perder o bónus de 45% desse mês.</span>
+      </div>
+      <label className="flex items-start gap-2 mt-3 text-[12px] font-bold text-slate-600 cursor-pointer">
+        <input type="checkbox" className="mt-0.5 w-4 h-4 accent-emerald-600" checked={!!agreed[r.id]}
+          onChange={(e) => setAgreed((p) => ({ ...p, [r.id]: e.target.checked }))} />
+        Li e compreendi a regra de pontualidade. Comprometo-me a chegar a horas.
+      </label>
+      <button onClick={() => confirm(r)}
+        className="w-full mt-3 p-4 bg-emerald-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 flex items-center justify-center gap-2">
+        <CheckCircle2 size={16} /> Confirmo que vou cobrir esta aula
+      </button>
+    </div>
+  );
+
+  const BoardRow = (r) => (
+    <div key={r.id} className="flex items-center gap-3 py-3 border-b border-slate-100 last:border-0">
+      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-[10px] shrink-0 ${r.confirmed ? "bg-indigo-50 text-indigo-600" : "bg-amber-100 text-amber-700"}`}>{subInitials(r.subName)}</div>
+      <div className="flex-1 min-w-0">
+        <p className="font-black text-slate-800 text-sm leading-none truncate">{r.subName} <span className="font-medium text-slate-400">→ {r.absentName}</span></p>
+        <p className="text-[11px] font-bold text-slate-400 mt-1 truncate">{r.time} · {r.room} · {r.book} · p.{r.page} · {r.lessontype}</p>
+      </div>
+      <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase border ${r.confirmed ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{r.confirmed ? "Confirmado" : "Pendente"}</span>
+    </div>
+  );
+
+  const todayList = subs.filter((r) => r.date === td).sort((a, b) => a.time.localeCompare(b.time));
+  const weekList = subs.filter((r) => r.date > td && r.date <= weekEnd).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+  const searchList = subs.filter((r) => !r.confirmed && r.subTeacherId !== meId &&
+    (!search.trim() || r.subName?.toLowerCase().includes(search.toLowerCase()) || r.absentName?.toLowerCase().includes(search.toLowerCase())));
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-24 text-left animate-in fade-in duration-300">
+      <header className="bg-white px-6 py-6 rounded-b-[40px] shadow-sm mb-4 border-b">
+        <div className="flex items-center gap-3">
+          {onBack && (
+            <button onClick={onBack} className="p-2 bg-slate-100 rounded-full active:scale-90" title="Voltar"><ArrowLeft size={20} /></button>
+          )}
+          <div className="flex-1">
+            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><Repeat size={22} className="text-indigo-600" /> Substituições</h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">{meName}</p>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          {[["request", "Pedir", <Edit3 size={14} key="i" />], ["confirm", "Confirmar", <CheckCircle2 size={14} key="i" />], ["board", "Quadro", <Users size={14} key="i" />]].map(([k, label, icon]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 transition-all ${tab === k ? "bg-slate-900 text-white shadow" : "bg-slate-100 text-slate-500"}`}>
+              {icon} {label}
+              {k === "confirm" && myPending.length > 0 && (
+                <span className="ml-1 w-5 h-5 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center">{myPending.length}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="px-6 space-y-4">
+        {tab === "request" && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><UserX size={14} /> Professor ausente</div>
+              <div><span className={labelCls}>Você (ausente)</span><input className={inputCls + " bg-slate-100"} value={meName} readOnly /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Data *</span><input type="date" className={inputCls} value={form.date} onChange={(e) => set("date", e.target.value)} /></div>
+                <div><span className={labelCls}>Hora da aula *</span>
+                  <select className={inputCls} value={form.time} onChange={(e) => set("time", e.target.value)}>
+                    <option value="">Selecionar</option>{SUB_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div><span className={labelCls}>Sala *</span><input className={inputCls} placeholder="ex.: Sala 3" value={form.room} onChange={(e) => set("room", e.target.value)} /></div>
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><BookOpen size={14} /> Detalhes da aula</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Livro *</span>
+                  <select className={inputCls} value={form.book} onChange={(e) => set("book", e.target.value)}>
+                    <option value="">Selecionar livro</option>{SUB_BOOKS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+                <div><span className={labelCls}>Última página *</span><input type="number" min="1" className={inputCls} placeholder="ex.: 42" value={form.page} onChange={(e) => set("page", e.target.value)} /></div>
+              </div>
+              <div><span className={labelCls}>Tipo de aula *</span>
+                <select className={inputCls} value={form.lessontype} onChange={(e) => set("lessontype", e.target.value)}>
+                  <option value="">Selecionar tipo</option>{SUB_LESSON_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div><span className={labelCls}>Notas para o substituto *</span><textarea className={inputCls + " min-h-[70px]"} placeholder="O que o substituto precisa de saber..." value={form.lessonnotes} onChange={(e) => set("lessonnotes", e.target.value)} /></div>
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><UserCheck size={14} /> Substituto & motivo</div>
+              <div><span className={labelCls}>Colega que aceitou cobrir *</span>
+                <select className={inputCls} value={form.subTeacherId} onChange={(e) => set("subTeacherId", e.target.value)}>
+                  <option value="">Selecionar colega</option>
+                  {teachers.filter((t) => t.id !== meId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div><span className={labelCls}>Motivo da ausência *</span>
+                <select className={inputCls} value={form.reason} onChange={(e) => set("reason", e.target.value)}>
+                  <option value="">Selecionar motivo</option>{SUB_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              {formError && <p className="text-red-500 text-sm font-bold">{formError}</p>}
+              <button onClick={submit} disabled={submitting}
+                className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Enviar pedido de substituição
+              </button>
+            </div>
+          </>
+        )}
+
+        {tab === "confirm" && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Bell size={14} /> As suas substituições pendentes</div>
+              {myPending.length ? <div className="space-y-3">{myPending.sort((a, b) => a.date.localeCompare(b.date)).map(SubCard)}</div>
+                : <div className="text-center py-6 text-slate-400 font-bold text-sm"><CheckCircle2 size={22} className="mx-auto mb-2 text-emerald-500" />Nenhuma substituição pendente para si.</div>}
+            </div>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Search size={14} /> Procurar todas as pendentes</div>
+              <input className={inputCls + " mb-3"} placeholder="Procurar por nome do substituto..." value={search} onChange={(e) => setSearch(e.target.value)} />
+              {searchList.length ? <div className="space-y-3">{searchList.sort((a, b) => a.date.localeCompare(b.date)).map(SubCard)}</div>
+                : <div className="text-center py-6 text-slate-400 font-bold text-sm">Nenhuma outra substituição pendente.</div>}
+            </div>
+          </>
+        )}
+
+        {tab === "board" && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2"><Calendar size={14} /> Hoje</div>
+              {todayList.length ? todayList.map(BoardRow) : <div className="text-center py-6 text-slate-400 font-bold text-sm">Sem substituições hoje.</div>}
+            </div>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2"><Calendar size={14} /> Esta semana</div>
+              {weekList.length ? weekList.map(BoardRow) : <div className="text-center py-6 text-slate-400 font-bold text-sm">Nada agendado para esta semana.</div>}
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TUNERS  —  teacher-facing (pedir exame oral / recuperação)
+// ═══════════════════════════════════════════════════════════════════════════════
+const Tuners = ({ actingTeacher, examReqs, recoveryReqs, onAddTunerRequest, notify, onBack }) => {
+  const [tab, setTab] = useState("exam");
+  const [exam, setExam] = useState({ date: getTodayStr(), time: "", students: "", book: "" });
+  const [rec, setRec] = useState({ date: getTodayStr(), lessons: "", students: "", book: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const meId = actingTeacher?.id;
+  const meName = actingTeacher?.name || "";
+
+  const inputCls = "w-full bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 outline-none font-bold text-sm focus:border-indigo-400";
+  const labelCls = "text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block";
+
+  const submitExam = async () => {
+    setErr("");
+    if (!exam.date || !exam.time || !exam.students || !exam.book) { setErr("Preencha todos os campos."); return; }
+    setBusy(true);
+    try {
+      await onAddTunerRequest("exam", { teacherId: meId, teacherName: meName, date: exam.date, time: exam.time, students: exam.students, book: exam.book });
+      setExam({ date: getTodayStr(), time: "", students: "", book: "" });
+      notify("Pedido de exame enviado.");
+    } catch (e) { setErr("Erro: " + (e?.message || e)); } finally { setBusy(false); }
+  };
+  const submitRec = async () => {
+    setErr("");
+    if (!rec.date || !rec.lessons || !rec.students || !rec.book) { setErr("Preencha todos os campos."); return; }
+    setBusy(true);
+    try {
+      await onAddTunerRequest("recovery", { teacherId: meId, teacherName: meName, date: rec.date, lessons: rec.lessons, students: rec.students, book: rec.book });
+      setRec({ date: getTodayStr(), lessons: "", students: "", book: "" });
+      notify("Pedido de recuperação enviado.");
+    } catch (e) { setErr("Erro: " + (e?.message || e)); } finally { setBusy(false); }
+  };
+
+  const myExams = examReqs.filter((r) => r.teacherId === meId).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const myRecs = recoveryReqs.filter((r) => r.teacherId === meId).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const statusChip = (r) => r.tunerId
+    ? <span className="px-2 py-1 rounded-full text-[9px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">Tuner: {r.tunerName}</span>
+    : <span className="px-2 py-1 rounded-full text-[9px] font-black bg-amber-50 text-amber-700 border border-amber-200 uppercase">À espera de tuner</span>;
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-24 text-left animate-in fade-in duration-300">
+      <header className="bg-white px-6 py-6 rounded-b-[40px] shadow-sm mb-4 border-b">
+        <div className="flex items-center gap-3">
+          {onBack && <button onClick={onBack} className="p-2 bg-slate-100 rounded-full active:scale-90" title="Voltar"><ArrowLeft size={20} /></button>}
+          <div className="flex-1">
+            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><UserCheck size={22} className="text-indigo-600" /> Tuners</h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Pedir exame oral ou recuperação</p>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          {[["exam", "Exame Oral"], ["recovery", "Recuperação"]].map(([k, label]) => (
+            <button key={k} onClick={() => { setTab(k); setErr(""); }}
+              className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all ${tab === k ? "bg-slate-900 text-white shadow" : "bg-slate-100 text-slate-500"}`}>{label}</button>
+          ))}
+        </div>
+      </header>
+
+      <main className="px-6 space-y-4">
+        {tab === "exam" && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><Edit3 size={14} /> Novo pedido de exame oral</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Data *</span><input type="date" className={inputCls} value={exam.date} onChange={(e) => setExam((p) => ({ ...p, date: e.target.value }))} /></div>
+                <div><span className={labelCls}>Hora *</span>
+                  <select className={inputCls} value={exam.time} onChange={(e) => setExam((p) => ({ ...p, time: e.target.value }))}>
+                    <option value="">Selecionar</option>{SUB_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Nº de alunos *</span><input type="number" min="1" className={inputCls} placeholder="ex.: 20" value={exam.students} onChange={(e) => setExam((p) => ({ ...p, students: e.target.value }))} /></div>
+                <div><span className={labelCls}>Livro *</span>
+                  <select className={inputCls} value={exam.book} onChange={(e) => setExam((p) => ({ ...p, book: e.target.value }))}>
+                    <option value="">Selecionar</option>{SUB_BOOKS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select></div>
+              </div>
+              {err && <p className="text-red-500 text-sm font-bold">{err}</p>}
+              <button onClick={submitExam} disabled={busy} className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Pedir exame
+              </button>
+            </div>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> Os meus pedidos de exame</div>
+              {myExams.length ? <div className="divide-y">{myExams.map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div><p className="font-black text-slate-800 text-sm">{fmtDatePt(r.date)} · {r.time}</p><p className="text-[11px] font-bold text-slate-400">{r.students} alunos · {r.book}</p></div>
+                  {statusChip(r)}
+                </div>
+              ))}</div> : <div className="text-center py-6 text-slate-400 font-bold text-sm">Ainda não pediu exames.</div>}
+            </div>
+          </>
+        )}
+
+        {tab === "recovery" && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><Edit3 size={14} /> Novo pedido de recuperação</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Data *</span><input type="date" className={inputCls} value={rec.date} onChange={(e) => setRec((p) => ({ ...p, date: e.target.value }))} /></div>
+                <div><span className={labelCls}>Nº de aulas *</span><input type="number" min="1" className={inputCls} placeholder="ex.: 3" value={rec.lessons} onChange={(e) => setRec((p) => ({ ...p, lessons: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Nº de alunos *</span><input type="number" min="1" className={inputCls} placeholder="ex.: 5" value={rec.students} onChange={(e) => setRec((p) => ({ ...p, students: e.target.value }))} /></div>
+                <div><span className={labelCls}>Livro *</span>
+                  <select className={inputCls} value={rec.book} onChange={(e) => setRec((p) => ({ ...p, book: e.target.value }))}>
+                    <option value="">Selecionar</option>{SUB_BOOKS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select></div>
+              </div>
+              {err && <p className="text-red-500 text-sm font-bold">{err}</p>}
+              <button onClick={submitRec} disabled={busy} className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Pedir recuperação
+              </button>
+            </div>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> Os meus pedidos de recuperação</div>
+              {myRecs.length ? <div className="divide-y">{myRecs.map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div><p className="font-black text-slate-800 text-sm">{fmtDatePt(r.date)}</p><p className="text-[11px] font-bold text-slate-400">{r.lessons} aula(s) · {r.students} alunos · {r.book}</p></div>
+                  {statusChip(r)}
+                </div>
+              ))}</div> : <div className="text-center py-6 text-slate-400 font-bold text-sm">Ainda não pediu recuperações.</div>}
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TUNER DEPARTMENT  —  tuner-facing (ver todos os pedidos, assumir, formulários)
+// ═══════════════════════════════════════════════════════════════════════════════
+const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRequest, onDeleteTunerRequest, notify, onBack }) => {
+  const [tab, setTab] = useState("exam");
+  const meId = actingTeacher?.id;
+  const meName = actingTeacher?.name || "";
+  const claim = async (kind, r) => { try { await onClaimTunerRequest(kind, r.id, meId, meName); notify("Assumiu o pedido de " + r.teacherName + "."); } catch (e) { notify("Erro: " + (e?.message || e)); } };
+  const del = async (kind, r) => { if (window.confirm("Remover este pedido?")) await onDeleteTunerRequest(kind, r.id); };
+
+  const exams = [...examReqs].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.time || "").localeCompare(b.time || ""));
+  const recs = [...recoveryReqs].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const openExams = exams.filter((r) => !r.tunerId).length;
+  const openRecs = recs.filter((r) => !r.tunerId).length;
+
+  const claimCell = (kind, r) => r.tunerId
+    ? <span className="font-black text-emerald-600 text-[12px]">{r.tunerName}</span>
+    : <button onClick={() => claim(kind, r)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest active:scale-95">Assumir</button>;
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-24 text-left animate-in fade-in duration-300">
+      <header className="bg-white px-6 py-6 rounded-b-[40px] shadow-sm mb-4 border-b">
+        <div className="flex items-center gap-3">
+          {onBack && <button onClick={onBack} className="p-2 bg-slate-100 rounded-full active:scale-90" title="Voltar"><ArrowLeft size={20} /></button>}
+          <div className="flex-1">
+            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><ShieldCheck size={22} className="text-indigo-600" /> Tuner Department</h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Todos os pedidos de exame e recuperação</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 mt-5">
+          <button onClick={() => openExternalUrl(TUNER_WEEKLY_PLAN_URL)} className="p-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest active:scale-95 flex items-center justify-center gap-2"><Calendar size={14} /> Weekly plan</button>
+          <button onClick={() => openExternalUrl(TUNER_OBSERVATION_URL)} className="p-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest active:scale-95 flex items-center justify-center gap-2"><ListChecks size={14} /> Observation report</button>
+        </div>
+        <div className="flex gap-2 mt-4">
+          {[["exam", "Exames", openExams], ["recovery", "Recuperações", openRecs]].map(([k, label, count]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 transition-all ${tab === k ? "bg-indigo-600 text-white shadow" : "bg-slate-100 text-slate-500"}`}>
+              {label}{count > 0 && <span className="w-5 h-5 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center">{count}</span>}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="px-6">
+        <div className="bg-white rounded-[28px] border border-slate-100 shadow-sm overflow-x-auto">
+          {tab === "exam" && (
+            <table className="w-full text-left text-sm min-w-[560px]">
+              <thead><tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b">
+                <th className="p-4">Teacher</th><th className="p-4">Time</th><th className="p-4">Students</th><th className="p-4">Book</th><th className="p-4">Date</th><th className="p-4">Tuner</th><th className="p-4"></th>
+              </tr></thead>
+              <tbody>
+                {exams.length ? exams.map((r) => (
+                  <tr key={r.id} className="border-b last:border-0">
+                    <td className="p-4 font-black text-slate-800">{r.teacherName}</td>
+                    <td className="p-4 font-bold text-slate-600">{r.time}</td>
+                    <td className="p-4 font-bold text-slate-600">{r.students}</td>
+                    <td className="p-4 font-bold text-slate-600">{r.book}</td>
+                    <td className="p-4 font-bold text-slate-600">{fmtDatePt(r.date)}</td>
+                    <td className="p-4">{claimCell("exam", r)}</td>
+                    <td className="p-4"><button onClick={() => del("exam", r)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button></td>
+                  </tr>
+                )) : <tr><td colSpan={7} className="p-8 text-center text-slate-400 font-bold">Sem pedidos de exame.</td></tr>}
+              </tbody>
+            </table>
+          )}
+          {tab === "recovery" && (
+            <table className="w-full text-left text-sm min-w-[560px]">
+              <thead><tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b">
+                <th className="p-4">Teacher</th><th className="p-4">Aulas</th><th className="p-4">Students</th><th className="p-4">Book</th><th className="p-4">Date</th><th className="p-4">Tuner</th><th className="p-4"></th>
+              </tr></thead>
+              <tbody>
+                {recs.length ? recs.map((r) => (
+                  <tr key={r.id} className="border-b last:border-0">
+                    <td className="p-4 font-black text-slate-800">{r.teacherName}</td>
+                    <td className="p-4 font-bold text-slate-600">{r.lessons}</td>
+                    <td className="p-4 font-bold text-slate-600">{r.students}</td>
+                    <td className="p-4 font-bold text-slate-600">{r.book}</td>
+                    <td className="p-4 font-bold text-slate-600">{fmtDatePt(r.date)}</td>
+                    <td className="p-4">{claimCell("recovery", r)}</td>
+                    <td className="p-4"><button onClick={() => del("recovery", r)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button></td>
+                  </tr>
+                )) : <tr><td colSpan={7} className="p-8 text-center text-slate-400 font-bold">Sem pedidos de recuperação.</td></tr>}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIDEBAR  —  navegação por papel (logo · menus · conta)
+// ═══════════════════════════════════════════════════════════════════════════════
+const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNavigate, onOpenAdmin, onSwitchTeacher, onLogout }) => {
+  const role = session?.role;
+  const items = [
+    { label: "Turmas", icon: Layout, view: "teacher_home" },
+    { label: "Substituições", icon: Repeat, view: "subs" },
+    { label: "Tuners", icon: UserCheck, view: "tuners" },
+  ];
+  if (role === "tuner") items.push({ label: "Tuner Department", icon: ShieldCheck, view: "tuner_dept" });
+
+  return (
+    <>
+      <div className={`fixed inset-0 bg-slate-950/50 z-40 transition-opacity lg:hidden ${open ? "opacity-100" : "opacity-0 pointer-events-none"}`} onClick={onClose} />
+      <aside className={`fixed inset-y-0 left-0 w-72 bg-slate-900 text-white z-50 flex flex-col transform transition-transform lg:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
+        {/* Logo */}
+        <div className="px-5 py-6 border-b border-slate-700/60">
+          <div className="bg-white rounded-2xl overflow-hidden shadow-sm">
+            <div className="flex h-1.5"><div className="flex-1 bg-[#F2C230]" /><div className="flex-1 bg-[#E8811F]" /></div>
+            <div className="px-4 py-3 text-center">
+              <p className="text-slate-800 text-lg leading-tight" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif", fontWeight: 400, letterSpacing: "0.5px" }}>Nancy&rsquo;s English School</p>
+            </div>
+            <div className="flex h-1.5"><div className="flex-1 bg-[#2B5FA8]" /><div className="flex-1 bg-[#E24B4A]" /></div>
+          </div>
+        </div>
+        {/* Menu */}
+        <nav className="flex-1 overflow-y-auto px-4 py-5 space-y-1">
+          {items.map((it) => (
+            <button key={it.view} onClick={() => onNavigate(it.view)}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-black text-sm transition-all ${view === it.view ? "bg-white text-slate-900" : "text-slate-300 hover:bg-slate-800"}`}>
+              <it.icon size={18} /> {it.label}
+            </button>
+          ))}
+          {tabletMode && (
+            <button onClick={onSwitchTeacher} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-black text-sm text-slate-300 hover:bg-slate-800">
+              <Users size={18} /> Trocar professor
+            </button>
+          )}
+          {role === "admin" && (
+            <button onClick={onOpenAdmin} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-black text-sm text-indigo-300 hover:bg-slate-800">
+              <ShieldCheck size={18} /> Direção
+            </button>
+          )}
+        </nav>
+        {/* Account */}
+        <div className="px-4 py-5 border-t border-slate-700/60">
+          <div className="flex items-center gap-3 px-2 mb-3">
+            <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center font-black text-xs">{subInitials(actingTeacher?.name || "?")}</div>
+            <div className="min-w-0"><p className="font-black text-sm truncate">{actingTeacher?.name || "—"}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{role === "admin" ? "Direção" : role === "tuner" ? "Tuner" : "Professor"}</p></div>
+          </div>
+          <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-black text-xs uppercase tracking-widest bg-slate-800 text-slate-300 hover:bg-slate-700">
+            <LogOut size={16} /> Sair
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN APP  —  Firebase-powered data layer
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -1070,6 +1870,7 @@ export default function App() {
   const [authLoading,   setAuthLoading]   = useState(true);
   const [dataLoading,   setDataLoading]   = useState(true);
   const [pendingApproval, setPendingApproval] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [view,          setView]          = useState("login");
   const [originView,    setOriginView]    = useState("teacher_home");
   const [teachers,      setTeachers]      = useState([]);
@@ -1077,6 +1878,9 @@ export default function App() {
   const [lessonPlans,   setLessonPlans]   = useState([]);
   const [logs,          setLogs]          = useState([]);
   const [accounts,      setAccounts]      = useState([]);
+  const [subs,          setSubs]          = useState([]);
+  const [examReqs,      setExamReqs]      = useState([]);
+  const [recoveryReqs,  setRecoveryReqs]  = useState([]);
   const [adminPin,      setAdminPinState] = useState("200503");
   const [tabletMode,    setTabletModeState] = useState(false);
   const [session,       setSession]       = useState(null);
@@ -1087,11 +1891,13 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError,    setLoginError]    = useState("");
   const [loginLoading,  setLoginLoading]  = useState(false);
+  const [signupName,    setSignupName]    = useState("");
   const [signupEmail,   setSignupEmail]   = useState("");
   const [signupPassword,setSignupPassword]= useState("");
   const [signupConfirm, setSignupConfirm] = useState("");
   const [signupError,   setSignupError]   = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
+  const signupNameRef = useRef("");
   const [notification,  setNotification]  = useState(null);
   const [teacherSearch, setTeacherSearch] = useState("");
   const [isPinModalOpen,setIsPinModalOpen]= useState(false);
@@ -1134,7 +1940,7 @@ export default function App() {
       return;
     }
     let resolved = 0;
-    const check = () => { if (++resolved >= 5) setDataLoading(false); };
+    const check = () => { if (++resolved >= 8) setDataLoading(false); };
     const timeout = setTimeout(() => setDataLoading(false), 8000);
 
     const unsubs = [
@@ -1143,6 +1949,9 @@ export default function App() {
       onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "logs"),        (s) => { setLogs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "users"),       (s) => { setAccounts(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
+      onSnapshot(collection(db, "substitutions"), (s) => { setSubs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
+      onSnapshot(collection(db, "examRequests"), (s) => { setExamReqs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
+      onSnapshot(collection(db, "recoveryRequests"), (s) => { setRecoveryReqs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
     ];
 
     seedFirestoreIfEmpty().catch(console.error);
@@ -1169,7 +1978,7 @@ export default function App() {
             // Auto-registo: cria perfil pendente à espera de aprovação do admin.
             profile = {
               email: (firebaseUser.email || "").toLowerCase(),
-              name: firebaseUser.displayName || "",
+              name: firebaseUser.displayName || signupNameRef.current || "",
               phone: "",
               role: "teacher",
               teacherId: "",
@@ -1232,7 +2041,7 @@ export default function App() {
       });
       return;
     }
-    await addDoc(collection(db, col), data);
+    return await addDoc(collection(db, col), data);
   }, []);
 
   const onUpdate = useCallback(async (col, id, patch) => {
@@ -1245,6 +2054,50 @@ export default function App() {
 
   const onCreateLog = useCallback(async (log) => {
     await addDoc(collection(db, "logs"), log);
+  }, []);
+
+  // ── Substitutions CRUD → Firestore ──────────────────────────────────────────
+  const onSubmitSub = useCallback(async (data) => {
+    await addDoc(collection(db, "substitutions"), {
+      ...data,
+      confirmed: false,
+      confirmedAt: null,
+      submittedAt: serverTimestamp(),
+    });
+  }, []);
+
+  const onConfirmSub = useCallback(async (id) => {
+    await updateDoc(doc(db, "substitutions", id), {
+      confirmed: true,
+      confirmedAt: serverTimestamp(),
+    });
+  }, []);
+
+  const onDeleteSub = useCallback(async (id) => {
+    await deleteDoc(doc(db, "substitutions", id));
+  }, []);
+
+  const onSetClassPlan = useCallback(async (classId, planId) => {
+    await updateDoc(doc(db, "classes", classId), { lessonPlanId: planId, planStartDate: getTodayStr() });
+    notify("Plano atualizado! O progresso recomeça para o novo plano.");
+  }, [notify]);
+
+  // ── Tuner requests CRUD → Firestore ─────────────────────────────────────────
+  const onAddTunerRequest = useCallback(async (kind, data) => {
+    const col = kind === "exam" ? "examRequests" : "recoveryRequests";
+    await addDoc(collection(db, col), {
+      ...data, tunerId: "", tunerName: "", createdAt: serverTimestamp(),
+    });
+  }, []);
+
+  const onClaimTunerRequest = useCallback(async (kind, id, tunerId, tunerName) => {
+    const col = kind === "exam" ? "examRequests" : "recoveryRequests";
+    await updateDoc(doc(db, col, id), { tunerId, tunerName });
+  }, []);
+
+  const onDeleteTunerRequest = useCallback(async (kind, id) => {
+    const col = kind === "exam" ? "examRequests" : "recoveryRequests";
+    await deleteDoc(doc(db, col, id));
   }, []);
 
   // ── Login / logout ──────────────────────────────────────────────────────────
@@ -1286,15 +2139,18 @@ export default function App() {
 
   const handleSignup = useCallback(async () => {
     setSignupError("");
+    if (!signupName.trim()) return setSignupError("Insira o seu nome.");
     if (!signupEmail.trim()) return setSignupError("Insira o seu email.");
     if (signupPassword.length < 6) return setSignupError("Senha mínimo 6 caracteres.");
     if (signupPassword !== signupConfirm) return setSignupError("As senhas não coincidem.");
     setSignupLoading(true);
     try {
+      // Guarda o nome para o onAuthStateChanged o gravar no perfil pendente.
+      signupNameRef.current = signupName.trim();
       // Auto-registo: cria a conta. O perfil pendente e o ecrã de espera
       // são tratados pelo onAuthStateChanged.
       await createUserWithEmailAndPassword(auth, signupEmail.trim().toLowerCase(), signupPassword);
-      setSignupEmail(""); setSignupPassword(""); setSignupConfirm("");
+      setSignupName(""); setSignupEmail(""); setSignupPassword(""); setSignupConfirm("");
     } catch (err) {
       if (err.code === "auth/email-already-in-use") {
         setSignupError("Este email já tem conta. Use o separador Entrar.");
@@ -1304,7 +2160,7 @@ export default function App() {
     } finally {
       setSignupLoading(false);
     }
-  }, [signupEmail, signupPassword, signupConfirm]);
+  }, [signupName, signupEmail, signupPassword, signupConfirm]);
 
   // ── Toast notification ──────────────────────────────────────────────────────
   const toast = notification ? (
@@ -1466,6 +2322,13 @@ export default function App() {
                   </p>
                 </div>
                 <div className="relative">
+                  <Type className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={22} />
+                  <input className="w-full bg-slate-50 p-5 pl-14 rounded-[24px] border-2 border-slate-50 outline-none font-bold"
+                    placeholder="Nome completo" value={signupName}
+                    onChange={(e) => setSignupName(e.target.value)}
+                    autoComplete="name" />
+                </div>
+                <div className="relative">
                   <Mail className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={22} />
                   <input className="w-full bg-slate-50 p-5 pl-14 rounded-[24px] border-2 border-slate-50 outline-none font-bold"
                     placeholder="Email" value={signupEmail}
@@ -1605,6 +2468,23 @@ export default function App() {
     <div className="antialiased font-sans min-h-screen bg-slate-50 text-slate-900 selection:bg-indigo-100">
       {toast}<PinModal />
 
+      <Sidebar
+        open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+        session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
+        onNavigate={(v) => { setSidebarOpen(false); if (["subs", "tuners", "tuner_dept"].includes(v)) setOriginView("teacher_home"); setView(v); }}
+        onOpenAdmin={() => { setSidebarOpen(false); setIsPinModalOpen(true); }}
+        onSwitchTeacher={() => { setSidebarOpen(false); setView("choose_teacher"); setTeacherSearch(""); }}
+        onLogout={() => { setSidebarOpen(false); handleLogout(); }}
+      />
+
+      {/* Mobile: floating button to open the sidebar */}
+      <button onClick={() => setSidebarOpen(true)}
+        className="lg:hidden fixed bottom-5 left-5 z-30 w-14 h-14 rounded-full bg-slate-900 text-white shadow-2xl flex items-center justify-center active:scale-90" title="Menu">
+        <Layout size={22} />
+      </button>
+
+      <div className="lg:pl-72">
+
       {view === "teacher_home" && actingTeacher && (
         <TeacherHome
           actingTeacher={actingTeacher}
@@ -1613,11 +2493,37 @@ export default function App() {
           setView={setView} setSelectedClass={setSelectedClass} setOriginView={setOriginView}
           onSwitchTeacher={() => { setView("choose_teacher"); setTeacherSearch(""); }}
           onOpenAdmin={() => setIsPinModalOpen(true)}
+          onOpenSubs={() => { setOriginView("teacher_home"); setView("subs"); }}
+          onSetClassPlan={onSetClassPlan}
           onExit={() => {
             if (tabletMode) { setView("choose_teacher"); setActingTeacher(null); return; }
             handleLogout();
           }}
           canOpenAdmin={session?.role === "admin"}
+        />
+      )}
+
+      {view === "subs" && actingTeacher && (
+        <Substitutions
+          actingTeacher={actingTeacher} teachers={teachers} subs={subs}
+          onSubmitSub={onSubmitSub} onConfirmSub={onConfirmSub} notify={notify}
+          onBack={() => setView(originView || "teacher_home")}
+        />
+      )}
+
+      {view === "tuners" && actingTeacher && (
+        <Tuners
+          actingTeacher={actingTeacher} examReqs={examReqs} recoveryReqs={recoveryReqs}
+          onAddTunerRequest={onAddTunerRequest} notify={notify}
+          onBack={() => setView(originView || "teacher_home")}
+        />
+      )}
+
+      {view === "tuner_dept" && actingTeacher && (
+        <TunerDepartment
+          actingTeacher={actingTeacher} examReqs={examReqs} recoveryReqs={recoveryReqs}
+          onClaimTunerRequest={onClaimTunerRequest} onDeleteTunerRequest={onDeleteTunerRequest} notify={notify}
+          onBack={() => setView(originView || "teacher_home")}
         />
       )}
 
@@ -1629,6 +2535,7 @@ export default function App() {
           setSelectedClass={setSelectedClass} setOriginView={setOriginView}
           adminPin={adminPin} setAdminPin={setAdminPin} setTabletMode={setTabletMode}
           onAdd={onAdd} onUpdate={onUpdate} onRemove={onRemove}
+          subs={subs} onDeleteSub={onDeleteSub}
         />
       )}
 
@@ -1648,6 +2555,7 @@ export default function App() {
           onCreateLog={onCreateLog}
         />
       )}
+      </div>
     </div>
   );
 }
