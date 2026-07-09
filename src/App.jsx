@@ -1365,10 +1365,10 @@ const AdminDashboard = ({
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUBSTITUTIONS  —  teacher-facing (Pedir / Confirmar / Quadro)
 // ═══════════════════════════════════════════════════════════════════════════════
-const Substitutions = ({ actingTeacher, teachers, subs, onSubmitSub, onConfirmSub, notify, onBack }) => {
+const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlans = [], logs = [], onSubmitSub, onConfirmSub, notify, onBack }) => {
   const [tab, setTab] = useState("request");
   const [form, setForm] = useState({
-    date: getTodayStr(), time: "", room: "", book: "", page: "",
+    classId: "", date: getTodayStr(), time: "", room: "", book: "", page: "",
     lessontype: "", lessonnotes: "", subTeacherId: "", reason: "",
   });
   const [formError, setFormError] = useState("");
@@ -1379,6 +1379,15 @@ const Substitutions = ({ actingTeacher, teachers, subs, onSubmitSub, onConfirmSu
   const meId = actingTeacher?.id;
   const meName = actingTeacher?.name || "";
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const myClasses = classes.filter((c) => c.teacherId === meId && c.active !== false);
+  const pickClass = (cid) => {
+    const cls = classes.find((c) => c.id === cid);
+    if (!cls) { setForm((p) => ({ ...p, classId: "" })); return; }
+    const prog = calculateProgress(cls.id, logs, lessonPlans, cls);
+    const planName = lessonPlans.find((p) => p.id === cls.lessonPlanId)?.name || "";
+    setForm((p) => ({ ...p, classId: cid, room: cls.room || "", book: planName, page: prog.lastEndPage ? String(prog.lastEndPage) : "" }));
+  };
 
   const myPending = subs.filter((r) => r.subTeacherId === meId && !r.confirmed);
   const [weekStart, weekEnd] = subWeekRange();
@@ -1399,10 +1408,11 @@ const Substitutions = ({ actingTeacher, teachers, subs, onSubmitSub, onConfirmSu
       await onSubmitSub({
         absentTeacherId: meId, absentName: meName,
         subTeacherId, subName,
+        classId: form.classId || "", className: classes.find((c) => c.id === form.classId)?.name || "",
         date, time, room, book, page, lessontype, lessonnotes, reason,
         submittedByTeacherId: meId,
       });
-      setForm({ date: getTodayStr(), time: "", room: "", book: "", page: "", lessontype: "", lessonnotes: "", subTeacherId: "", reason: "" });
+      setForm({ classId: "", date: getTodayStr(), time: "", room: "", book: "", page: "", lessontype: "", lessonnotes: "", subTeacherId: "", reason: "" });
       notify(`Pedido enviado. ${subName} foi avisado(a).`);
       setTab("board");
     } catch (e) {
@@ -1493,6 +1503,14 @@ const Substitutions = ({ actingTeacher, teachers, subs, onSubmitSub, onConfirmSu
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><UserX size={14} /> Professor ausente</div>
               <div><span className={labelCls}>Você (ausente)</span><input className={inputCls + " bg-slate-100"} value={meName} readOnly /></div>
+              <div>
+                <span className={labelCls}>Turma</span>
+                <select className={inputCls} value={form.classId} onChange={(e) => pickClass(e.target.value)}>
+                  <option value="">Escolher a minha turma…</option>
+                  {myClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <p className="text-[10px] font-bold text-indigo-500 mt-1">Escolhe a turma e a sala, o livro e a última página preenchem-se sozinhos.</p>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><span className={labelCls}>Data *</span><input type="date" className={inputCls} value={form.date} onChange={(e) => set("date", e.target.value)} /></div>
                 <div><span className={labelCls}>Hora da aula *</span>
@@ -1507,10 +1525,8 @@ const Substitutions = ({ actingTeacher, teachers, subs, onSubmitSub, onConfirmSu
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><BookOpen size={14} /> Detalhes da aula</div>
               <div className="grid grid-cols-2 gap-3">
-                <div><span className={labelCls}>Livro *</span>
-                  <select className={inputCls} value={form.book} onChange={(e) => set("book", e.target.value)}>
-                    <option value="">Selecionar livro</option>{SUB_BOOKS.map((b) => <option key={b} value={b}>{b}</option>)}
-                  </select>
+                <div><span className={labelCls}>Livro / plano *</span>
+                  <input className={inputCls} placeholder="ex.: DM Book 2" value={form.book} onChange={(e) => set("book", e.target.value)} />
                 </div>
                 <div><span className={labelCls}>Última página *</span><input type="number" min="1" className={inputCls} placeholder="ex.: 42" value={form.page} onChange={(e) => set("page", e.target.value)} /></div>
               </div>
@@ -2506,6 +2522,7 @@ export default function App() {
       {view === "subs" && actingTeacher && (
         <Substitutions
           actingTeacher={actingTeacher} teachers={teachers} subs={subs}
+          classes={classes} lessonPlans={lessonPlans} logs={logs}
           onSubmitSub={onSubmitSub} onConfirmSub={onConfirmSub} notify={notify}
           onBack={() => setView(originView || "teacher_home")}
         />
