@@ -188,6 +188,16 @@ function paymentStatus(paid) {
   if (hoje >= inicio) return "fatura";
   return "pendente";
 }
+// Feriados / dias não letivos
+const isHolidayDate = (dateStr, holidays) => (holidays || []).some((h) => (typeof h === "string" ? h : h && h.date) === dateStr);
+const holidayName = (dateStr, holidays) => { const h = (holidays || []).find((x) => (typeof x === "string" ? x : x && x.date) === dateStr); return h && typeof h === "object" ? h.name : ""; };
+const isWeekendDate = (dateStr) => { const d = new Date(dateStr + "T12:00:00Z").getUTCDay(); return d === 0 || d === 6; };
+// Feriados nacionais de Angola de data fixa (as datas móveis — Carnaval, Sexta Santa — adicionam-se à mão)
+const ANGOLA_HOLIDAYS = (year) => [
+  [`${year}-01-01`, "Ano Novo"], [`${year}-02-04`, "Início da Luta Armada"], [`${year}-03-08`, "Dia da Mulher"],
+  [`${year}-03-23`, "Libertação da África Austral"], [`${year}-04-04`, "Dia da Paz"], [`${year}-05-01`, "Dia do Trabalhador"],
+  [`${year}-09-17`, "Herói Nacional"], [`${year}-11-02`, "Finados"], [`${year}-11-11`, "Independência"], [`${year}-12-25`, "Natal"],
+].map(([date, name]) => ({ date, name }));
 // Aviso: 3 faltas seguidas (na semana carregada) sem observação
 function has3Absences(marks) {
   let run = 0;
@@ -831,6 +841,7 @@ const AdminDashboard = ({
   notify, setView, setSelectedClass, setOriginView,
   adminPin, setAdminPin, setTabletMode,
   rosterUrls = {}, setRosterUrls, syncRoster, revertSync,
+  holidays = [], setHolidays,
   onAdd, onUpdate, onRemove,
   subs = [], onDeleteSub,
   examReqs = [], recoveryReqs = [], physExams = [], tkExercises = [],
@@ -862,6 +873,8 @@ const AdminDashboard = ({
   const [urlDraft, setUrlDraft] = useState(rosterUrls);
   const [syncing, setSyncing] = useState(false);
   const [syncReport, setSyncReport] = useState(null);
+  const [holiDate, setHoliDate] = useState("");
+  const [holiName, setHoliName] = useState("");
   useEffect(() => { setUrlDraft(rosterUrls || {}); }, [rosterUrls]);
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", roles: ["teacher"] });
@@ -878,8 +891,10 @@ const AdminDashboard = ({
 
   const missingLogsYesterday = useMemo(() => {
     const yesterday = getYesterdayStr();
+    // Não avisar se ontem foi fim-de-semana ou feriado
+    if (isWeekendDate(yesterday) || isHolidayDate(yesterday, holidays)) return [];
     return classes.filter((cls) => cls.active !== false && !logs.some((l) => l.classId === cls.id && l.date === yesterday));
-  }, [classes, logs]);
+  }, [classes, logs, holidays]);
 
   const totalPlanLessons = useMemo(
     () => activePlan.blocks?.reduce((acc, b) => acc + (parseInt(b.expectedLessons, 10) || 0), 0) || 0,
@@ -2029,6 +2044,53 @@ const AdminDashboard = ({
                 Reverter última sincronização
               </button>
             </div>
+
+            <div className="border-t pt-8">
+              <div className="flex items-center gap-3 mb-4">
+                <Calendar className="text-rose-600" size={22} />
+                <div>
+                  <p className="font-black text-slate-800">Feriados / dias não letivos</p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">bloqueados nas presenças e ignorados nos avisos</p>
+                </div>
+              </div>
+              <div className="p-4 bg-rose-50 rounded-2xl text-[11px] font-bold text-rose-700 leading-relaxed mb-4">
+                Nestes dias, as presenças ficam <span className="font-black">bloqueadas</span> (🏖️) e não contam para o aviso de 3 faltas nem para o "sem registo de ontem". Os feriados de data fixa de Angola podem ser adicionados de uma vez; datas móveis (Carnaval, Sexta Santa) e pausas da escola adicionas à mão.
+              </div>
+              <div className="flex flex-wrap gap-2 items-end">
+                <div><p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Data</p>
+                  <input type="date" className="p-3 bg-slate-50 border rounded-xl font-bold text-sm" value={holiDate} onChange={(e) => setHoliDate(e.target.value)} /></div>
+                <div className="flex-1 min-w-[140px]"><p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Nome (opcional)</p>
+                  <input className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm" placeholder="ex.: Pausa escolar" value={holiName} onChange={(e) => setHoliName(e.target.value)} /></div>
+                <button onClick={() => {
+                  if (!holiDate) return notify("Escolha a data.");
+                  if (holidays.some((h) => (h.date || h) === holiDate)) return notify("Essa data já está na lista.");
+                  setHolidays([...holidays, { date: holiDate, name: holiName.trim() }].sort((a, b) => (a.date || a).localeCompare(b.date || b)));
+                  setHoliDate(""); setHoliName(""); notify("Feriado adicionado.");
+                }} className="p-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] tracking-widest active:scale-95">Adicionar</button>
+              </div>
+              <button onClick={() => {
+                const y = parseInt(getTodayStr().slice(0, 4), 10);
+                const merged = [...holidays];
+                [...ANGOLA_HOLIDAYS(y), ...ANGOLA_HOLIDAYS(y + 1)].forEach((h) => { if (!merged.some((x) => (x.date || x) === h.date)) merged.push(h); });
+                setHolidays(merged.sort((a, b) => (a.date || a).localeCompare(b.date || b)));
+                notify("Feriados de Angola adicionados.");
+              }} className="w-full mt-3 p-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-2xl font-black uppercase text-[10px] tracking-widest active:scale-95">
+                Adicionar feriados de Angola ({getTodayStr().slice(0, 4)}–{parseInt(getTodayStr().slice(0, 4), 10) + 1})
+              </button>
+              {holidays.length > 0 && (
+                <div className="mt-4 bg-slate-50 rounded-2xl border divide-y">
+                  {holidays.slice().sort((a, b) => (a.date || a).localeCompare(b.date || b)).map((h) => {
+                    const d = h.date || h;
+                    return (
+                      <div key={d} className="flex items-center justify-between px-4 py-2.5">
+                        <span className="text-sm font-bold text-slate-700">{fmtDatePt(d)} <span className="text-slate-400 font-medium">{h.name || ""}</span></span>
+                        <button onClick={() => setHolidays(holidays.filter((x) => (x.date || x) !== d))} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -2723,8 +2785,9 @@ const AssistantDepartment = ({ actingTeacher, schools = [], physExams, tkExercis
 // SIDEBAR  —  navegação por papel (logo · menus · conta)
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Presenças: grelha semanal por turma (alunos vindos da folha, marcação na app) ──
-const Attendance = ({ selectedClass, session, notify, setView, originView, onSyncClass }) => {
+const Attendance = ({ selectedClass, session, notify, setView, originView, onSyncClass, holidays = [] }) => {
   const cls = selectedClass;
+  const holiOf = (d) => isHolidayDate(d, holidays);
   const [roster, setRoster] = useState(null);
   const [syncingOne, setSyncingOne] = useState(false);
   const [weekBase, setWeekBase] = useState(getTodayStr());
@@ -2768,6 +2831,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   const weekObs = (key) => days.some((d) => (att[d]?.obs?.[key] || "").trim());
 
   const toggle = async (st, date) => {
+    if (holiOf(date)) return; // dia não letivo
     const key = studentKey(st.nome);
     const cur = markOf(key, date);
     const val = (!cur || cur.startsWith("A")) ? "P" : "A";
@@ -2854,7 +2918,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
                 <tr className="bg-slate-50">
                   <th className="p-3 text-left font-black text-slate-500 text-[10px] uppercase tracking-widest sticky left-0 bg-slate-50 z-10">Aluno</th>
                   {days.map((d, i) => (
-                    <th key={d} className="p-2 font-black text-slate-500 text-[10px] uppercase">{WEEKDAYS_SHORT[i]}<br /><span className="text-slate-400">{parseInt(d.split("-")[2], 10)}</span></th>
+                    <th key={d} className={`p-2 font-black text-[10px] uppercase ${holiOf(d) ? "text-rose-400" : "text-slate-500"}`} title={holiOf(d) ? (holidayName(d, holidays) || "Feriado") : ""}>{WEEKDAYS_SHORT[i]}<br /><span className={holiOf(d) ? "text-rose-300" : "text-slate-400"}>{holiOf(d) ? "🏖️" : parseInt(d.split("-")[2], 10)}</span></th>
                   ))}
                   <th className="p-2 font-black text-slate-500 text-[10px] uppercase">Pagou</th>
                   <th className="p-2 font-black text-slate-500 text-[10px] uppercase">Obs</th>
@@ -2866,7 +2930,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
                   const key = studentKey(st.nome);
                   const paidNow = isPaidOf(st);
                   const status = paymentStatus(paidNow);
-                  const warn = has3Absences(weekMarks(key)) && !weekObs(key);
+                  const warn = has3Absences(days.filter((d) => !holiOf(d)).map((d) => markOf(key, d))) && !weekObs(key);
                   return (
                     <tr key={key} className="border-t">
                       <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[150px]">
@@ -2877,6 +2941,11 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
                       </td>
                       {days.map((d) => {
                         const v = markOf(key, d);
+                        if (holiOf(d)) return (
+                          <td key={d} className="p-1.5 text-center">
+                            <div className="w-11 h-10 rounded-xl border-2 border-dashed border-rose-200 bg-rose-50 flex items-center justify-center text-sm" title={holidayName(d, holidays) || "Feriado"}>🏖️</div>
+                          </td>
+                        );
                         return (
                           <td key={d} className="p-1.5 text-center">
                             <button onClick={() => toggle(st, d)}
@@ -2904,7 +2973,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
       {roster && roster !== "none" && !loading && (() => {
         const faltas = students.map((st) => {
           const key = studentKey(st.nome);
-          const dias = days.map((d, i) => markOf(key, d).startsWith("A") ? WEEKDAYS_SHORT[i] : null).filter(Boolean);
+          const dias = days.map((d, i) => (!holiOf(d) && markOf(key, d).startsWith("A")) ? WEEKDAYS_SHORT[i] : null).filter(Boolean);
           const motivo = days.map((d) => att[d]?.obs?.[key]).find(Boolean) || "";
           return { nome: st.nome, dias, motivo };
         }).filter((f) => f.dias.length);
@@ -3041,6 +3110,7 @@ export default function App() {
   const [adminPin,      setAdminPinState] = useState("200503");
   const [tabletMode,    setTabletModeState] = useState(false);
   const [rosterUrls,    setRosterUrlsState] = useState({});
+  const [holidays,      setHolidaysState] = useState([]);
   const [session,       setSession]       = useState(null);
   const [actingTeacher, setActingTeacher] = useState(null);
   const [selectedClass, setSelectedClass] = useState(null);
@@ -3082,6 +3152,11 @@ export default function App() {
   const setRosterUrls = useCallback(async (urls) => {
     setRosterUrlsState(urls);
     try { await setDoc(doc(db, "settings", "main"), { rosterUrls: urls }, { merge: true }); } catch {}
+  }, []);
+
+  const setHolidays = useCallback(async (list) => {
+    setHolidaysState(list);
+    try { await setDoc(doc(db, "settings", "main"), { holidays: list }, { merge: true }); } catch {}
   }, []);
 
   // Sincroniza alunos da folha (CSV publicado) → cria professores/turmas em falta e grava rosters/{classId}
@@ -3186,6 +3261,7 @@ export default function App() {
         setAdminPinState(String(s.data().adminPin || "200503"));
         setTabletModeState(!!s.data().tabletMode);
         setRosterUrlsState(s.data().rosterUrls || {});
+        setHolidaysState(s.data().holidays || []);
       }
     });
     return () => unsubSettings();
@@ -3886,6 +3962,7 @@ export default function App() {
           setSelectedClass={setSelectedClass} setOriginView={setOriginView}
           adminPin={adminPin} setAdminPin={setAdminPin} setTabletMode={setTabletMode}
           rosterUrls={rosterUrls} setRosterUrls={setRosterUrls} syncRoster={syncRoster} revertSync={revertSync}
+          holidays={holidays} setHolidays={setHolidays}
           onAdd={onAdd} onUpdate={onUpdate} onRemove={onRemove}
           subs={subs} onDeleteSub={onDeleteSub}
           examReqs={examReqs} recoveryReqs={recoveryReqs} physExams={physExams} tkExercises={tkExercises}
@@ -3900,7 +3977,7 @@ export default function App() {
       )}
 
       {view === "attendance" && selectedClass && (
-        <Attendance selectedClass={selectedClass} session={session} notify={notify} setView={setView} originView={originView} onSyncClass={syncOneClass} />
+        <Attendance selectedClass={selectedClass} session={session} notify={notify} setView={setView} originView={originView} onSyncClass={syncOneClass} holidays={holidays} />
       )}
 
       {view === "class_plan_view" && selectedClass && (
