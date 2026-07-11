@@ -11,6 +11,7 @@ import {
   Archive, ArchiveRestore, X,
 } from "lucide-react";
 
+import logoNancy from "./assets/logo-nancy.png";
 import { auth, db } from "./firebase";
 import {
   signInWithEmailAndPassword,
@@ -37,6 +38,10 @@ const getYesterdayStr = () => {
 };
 
 // ─── Substitutions helpers & constants ──────────────────────────────────────
+const SCHOOLS = ["CKC", "Benguela", "Lobito"];
+const TK_SCHOOLS = ["CKC", "Lobito"]; // TK Exercise só nestas
+const EXAM_ROUNDS = ["1ª", "2ª", "3ª"];
+const BOOK_HALVES = ["1ª metade", "2ª metade"];
 const SUB_TIMES = ["08:00", "09:10", "10:20", "12:00", "13:10", "14:20", "15:30", "16:45", "18:10", "19:20"];
 const SUB_BOOKS = [
   "Book 1 — Part 1", "Book 1 — Part 2", "Book 2 — Part 1", "Book 2 — Part 2",
@@ -123,7 +128,7 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
   if (!classObj || !lessonPlans?.length)
     return { lastEndPage: 0, status: "ON TRACK", statusLabel: "A CARREGAR...",
       colorClass: "text-slate-500 bg-slate-100 border-slate-200",
-      activeBlock: null, progressNote: "", dictationCount: 0, lastWord: "", lastLog: null, planComplete: false };
+      activeBlock: null, progressNote: "", dictationCount: 0, lastWord: "", lastLog: null, planComplete: false, lessonDelta: 0 };
 
   const plan = lessonPlans.find((p) => p.id === classObj.lessonPlanId);
   const planStart = classObj.planStartDate || null;
@@ -134,13 +139,13 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
 
   const lastLog = classLogs[classLogs.length - 1] || null;
   const lastEndPage = lastLog ? parseInt(lastLog.endPage || 0, 10) : 0;
-  const dictationCount = classLogs.filter((l) => !!l.dictation).length;
+  const dictationCount = classLogs.reduce((a, l) => a + (Number.isFinite(l.dictationCount) ? l.dictationCount : (l.dictation ? 1 : 0)), 0);
 
   if (!plan?.blocks?.length)
     return { lastEndPage, status: "ON TRACK", statusLabel: "SEM PLANO",
       colorClass: "text-slate-500 bg-slate-100 border-slate-200",
       activeBlock: null, progressNote: "", dictationCount,
-      lastWord: lastLog?.lastWord || "", lastLog, planComplete: false, noPlan: true };
+      lastWord: lastLog?.lastWord || "", lastLog, planComplete: false, noPlan: true, lessonDelta: 0 };
 
   let activeBlock = plan.blocks.find((b) => {
     const s = parseInt(b.startPage || 0, 10);
@@ -191,7 +196,7 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
   else progressNote = `Atraso: faltam ${pagesLeft} páginas (aulas planeadas já usadas)`;
 
   return { lastEndPage, status, statusLabel, colorClass, activeBlock,
-    progressNote, dictationCount, lastWord: lastLog?.lastWord || "", lastLog, planComplete, noPlan: false };
+    progressNote, dictationCount, lastWord: lastLog?.lastWord || "", lastLog, planComplete, noPlan: false, lessonDelta: Math.round(lessonDelta) };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -451,7 +456,8 @@ const ClassPlanView = ({ selectedClass, lessonPlans, logs, setView, originView }
 const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify, originView, onCreateLog }) => {
   const prog = calculateProgress(selectedClass.id, logs, lessonPlans, selectedClass);
   const [customTypeMode, setCustomTypeMode] = useState(false);
-  const [isDictation,    setIsDictation]    = useState(false);
+  const [dictationCount, setDictationCount] = useState("");
+  const [oralSkillCount, setOralSkillCount] = useState("");
   const [typeSelect,     setTypeSelect]     = useState(prog.activeBlock?.type || "");
   const [typeCustom,     setTypeCustom]     = useState("");
   const [startPage,      setStartPage]      = useState(String((prog.lastEndPage || 0) + 1));
@@ -537,18 +543,19 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-amber-100 text-amber-600 rounded-2xl"><Mic2 size={24} /></div>
-            <div>
-              <p className="font-black text-slate-700 leading-none">Ditado (Dictation) realizado?</p>
-              <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Será somado ao contador da turma</p>
-            </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-5 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
+            <div className="flex items-center gap-2 mb-3"><div className="p-2 bg-amber-100 text-amber-600 rounded-xl"><Mic2 size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Ditados</p></div>
+            <input type="number" min="0" placeholder="0"
+              className="w-full p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+              value={dictationCount} onChange={(e) => setDictationCount(e.target.value)} />
           </div>
-          <button type="button" onClick={() => setIsDictation((p) => !p)}
-            className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all ${isDictation ? "bg-indigo-600 text-white shadow-lg" : "bg-white text-slate-200 border-2 border-slate-100"}`}>
-            {isDictation ? <CheckSquare size={28} /> : <Square size={28} />}
-          </button>
+          <div className="p-5 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
+            <div className="flex items-center gap-2 mb-3"><div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl"><Activity size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Oral skills</p></div>
+            <input type="number" min="0" placeholder="0"
+              className="w-full p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+              value={oralSkillCount} onChange={(e) => setOralSkillCount(e.target.value)} />
+          </div>
         </div>
 
         <div className="bg-slate-50 p-6 rounded-[40px] border-2 border-slate-100 shadow-sm">
@@ -594,7 +601,9 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
             teacherName: finalTeacherObj ? finalTeacherObj.name : "N/D",
             type: finalType, startPage: s, endPage: e,
             lastWord: String(lastWord || "").trim(),
-            dictation: !!isDictation,
+            dictationCount: parseInt(dictationCount, 10) || 0,
+            oralSkillCount: parseInt(oralSkillCount, 10) || 0,
+            dictation: (parseInt(dictationCount, 10) || 0) > 0,
             isCustomType: !!customTypeMode,
             notes: String(notes || "").trim(),
           });
@@ -614,19 +623,22 @@ const AdminDashboard = ({
   adminPin, setAdminPin, setTabletMode,
   onAdd, onUpdate, onRemove,
   subs = [], onDeleteSub,
+  examReqs = [], recoveryReqs = [], physExams = [], tkExercises = [],
+  onDeleteTunerRequest, onDeleteAssistantRequest,
+  tab, setTab,
 }) => {
-  const [tab, setTab] = useState("classes");
+  const [viewSchool, setViewSchool] = useState("all");
   const [subDirTab, setSubDirTab] = useState("records");
   const [subFilDate, setSubFilDate] = useState("all");
   const [subFilStatus, setSubFilStatus] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddingCls, setIsAddingCls] = useState(false);
-  const [newCls, setNewCls] = useState({ name: "", room: "", lessonPlanId: "", teacherId: "" });
+  const [newCls, setNewCls] = useState({ time: "", room: "", lessonPlanId: "", teacherId: "", school: "", type: "DM" });
   const [isAddingTeacher, setIsAddingTeacher] = useState(false);
   const [newTeacher, setNewTeacher] = useState({ name: "", rate: 2000 });
   const [editingTeacherId, setEditingTeacherId] = useState(null);
   const [editingClassId, setEditingClassId] = useState(null);
-  const [editCls, setEditCls] = useState({ name: "", room: "", teacherId: "", lessonPlanId: "" });
+  const [editCls, setEditCls] = useState({ time: "", room: "", teacherId: "", lessonPlanId: "", school: "", type: "DM" });
   const [isEditingPlan, setIsEditingPlan] = useState(false);
   const [activePlan, setActivePlan] = useState({ name: "", blocks: [] });
   const [newPinInput, setNewPinInput] = useState("");
@@ -634,12 +646,14 @@ const AdminDashboard = ({
   const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", role: "teacher" });
   const [accountError, setAccountError] = useState("");
   const [editingAccountId, setEditingAccountId] = useState(null);
-  const [editAccount, setEditAccount] = useState({ teacherId: "", role: "teacher", name: "" });
+  const [editAccount, setEditAccount] = useState({ teacherId: "", role: "teacher", name: "", schools: [] });
 
   const filteredClasses = useMemo(() => {
     const st = searchTerm.toLowerCase();
-    return classes.filter((c) => c.name.toLowerCase().includes(st));
-  }, [classes, searchTerm]);
+    return classes
+      .filter((c) => viewSchool === "all" || c.school === viewSchool)
+      .filter((c) => c.name.toLowerCase().includes(st));
+  }, [classes, searchTerm, viewSchool]);
 
   const missingLogsYesterday = useMemo(() => {
     const yesterday = getYesterdayStr();
@@ -668,9 +682,17 @@ const AdminDashboard = ({
               )}
             </div>
           </div>
-          <button onClick={() => setView("teacher_home")} className="p-2 bg-slate-800 rounded-full active:scale-90">
-            <LogOut size={20} />
-          </button>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {["all", ...SCHOOLS].map((s) => (
+              <button key={s} onClick={() => setViewSchool(s)}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${viewSchool === s ? "bg-white text-slate-900" : "bg-slate-800 text-slate-400"}`}>
+                {s === "all" ? "Todas" : s}
+              </button>
+            ))}
+            <button onClick={() => setView("teacher_home")} className="p-2 bg-slate-800 rounded-full active:scale-90 ml-1">
+              <LogOut size={20} />
+            </button>
+          </div>
         </div>
 
         {missingLogsYesterday.length > 0 && (
@@ -693,12 +715,13 @@ const AdminDashboard = ({
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
           {[
             { id: "classes",  label: "Turmas",     icon: Layout    },
+            { id: "analises", label: "Análises",   icon: BarChart3 },
             { id: "teachers", label: "Staff",      icon: Briefcase },
             { id: "plans",    label: "Planos",     icon: BookOpen  },
-            { id: "payroll",  label: "Folha",      icon: DollarSign},
             { id: "accounts", label: "Contas",     icon: UserCog   },
             { id: "subs",     label: "Substituições", icon: Repeat },
-            { id: "settings", label: "PIN/Tablet", icon: KeyRound  },
+            { id: "pedidos",  label: "Pedidos",    icon: ListChecks },
+            { id: "settings", label: "Tablet",     icon: KeyRound  },
           ].map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`px-5 py-3 rounded-2xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap ${tab === t.id ? "bg-white text-slate-900 shadow-xl scale-105" : "bg-slate-800 text-slate-400"}`}>
@@ -710,6 +733,105 @@ const AdminDashboard = ({
 
       <main className="px-6 space-y-6">
 
+        {/* ── ANÁLISES (registos do mês) ── */}
+        {tab === "analises" && (() => {
+          const ym = getYM(getTodayStr());
+          const day = parseInt(getTodayStr().slice(8, 10), 10) || 1;
+          const weeks = Math.max(1, Math.ceil(day / 7));
+          const cls = classes.filter((c) => c.active !== false && (viewSchool === "all" || c.school === viewSchool));
+          const clsIds = new Set(cls.map((c) => c.id));
+          const monthLogs = logs.filter((l) => getYM(l.date) === ym && (viewSchool === "all" || clsIds.has(l.classId)));
+          const monthSubs = subs.filter((s) => getYM(s.date) === ym);
+          const teacherList = teachers.filter((t) => cls.some((c) => c.teacherId === t.id));
+          let behind = 0, on = 0, ahead = 0;
+          cls.forEach((c) => { const st = calculateProgress(c.id, logs, lessonPlans, c).status; if (st === "BEHIND") behind++; else if (st === "AHEAD") ahead++; else on++; });
+          const dcount = (l) => (Number.isFinite(l.dictationCount) ? l.dictationCount : (l.dictation ? 1 : 0));
+          const ocount = (l) => (Number.isFinite(l.oralSkillCount) ? l.oralSkillCount : 0);
+          const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "S/D";
+          const perClass = cls.map((c) => {
+            const cl = monthLogs.filter((l) => l.classId === c.id);
+            const ditados = cl.reduce((a, l) => a + dcount(l), 0);
+            const oral = cl.reduce((a, l) => a + ocount(l), 0);
+            const p = calculateProgress(c.id, logs, lessonPlans, c);
+            return { c, aulas: cl.length, ditados, oral, status: p.status, statusLabel: p.statusLabel, delta: p.lessonDelta || 0, dictOk: ditados >= weeks };
+          }).sort((a, b) => a.c.name.localeCompare(b.c.name));
+          const perTeacher = teacherList.map((t) => {
+            const tl = monthLogs.filter((l) => l.teacherId === t.id);
+            const ditados = tl.reduce((a, l) => a + dcount(l), 0);
+            const faltas = monthSubs.filter((s) => s.absentTeacherId === t.id).length;
+            const behindCls = cls.filter((c) => c.teacherId === t.id && calculateProgress(c.id, logs, lessonPlans, c).status === "BEHIND").length;
+            return { t, aulas: tl.length, ditados, faltas, behindCls, dictOk: ditados >= weeks };
+          }).sort((a, b) => b.faltas - a.faltas);
+          const aulasMes = monthLogs.length, ditadosMes = monthLogs.reduce((a, l) => a + dcount(l), 0), oralMes = monthLogs.reduce((a, l) => a + ocount(l), 0), faltasMes = monthSubs.length;
+          const maxFal = Math.max(1, ...perTeacher.map((p) => p.faltas));
+          const card = (n, label, color) => (
+            <div className="bg-white rounded-[24px] p-5 border text-center shadow-sm"><p className={`text-3xl font-black ${color}`}>{n}</p><p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{label}</p></div>
+          );
+          const barRow = (name, val, max, color) => (
+            <div key={name} className="flex items-center gap-2 my-1.5">
+              <div className="text-[12px] font-bold text-slate-700 w-24 truncate" title={name}>{name}</div>
+              <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full ${color}`} style={{ width: `${Math.round(val / max * 100)}%` }} /></div>
+              <div className="text-[11px] font-black text-slate-500 w-6 text-right">{val}</div>
+            </div>
+          );
+          const stBadge = (status, label) => {
+            const c = status === "BEHIND" ? "bg-red-50 text-red-600 border-red-200" : status === "AHEAD" ? "bg-blue-50 text-blue-600 border-blue-200" : "bg-green-50 text-green-700 border-green-200";
+            return <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${c}`}>{label}</span>;
+          };
+          return (
+            <div className="space-y-4 text-left">
+              <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 px-1">Mês: {fmtMonthPt(ym)} · {weeks} semana(s){viewSchool !== "all" ? ` · ${viewSchool}` : ""}</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {card(aulasMes, "Aulas no mês", "text-indigo-600")}
+                {card(ditadosMes, "Ditados", "text-emerald-600")}
+                {card(oralMes, "Oral skills", "text-blue-600")}
+                {card(faltasMes, "Faltas", "text-amber-600")}
+              </div>
+
+              {/* TURMA POR TURMA */}
+              <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Layout size={14} /> Turma por turma ({fmtMonthPt(ym)})</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm min-w-[560px]">
+                    <thead><tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b">
+                      <th className="p-2">Turma</th><th className="p-2">Professor</th><th className="p-2">Aulas</th><th className="p-2">Ditados</th><th className="p-2">Oral</th><th className="p-2">Estado</th><th className="p-2">Atraso/Avanço</th><th className="p-2"></th>
+                    </tr></thead>
+                    <tbody>
+                      {perClass.map((p) => (
+                        <tr key={p.c.id} className="border-b last:border-0">
+                          <td className="p-2 font-black text-slate-800">{p.c.name}<span className="text-[9px] text-slate-400 ml-1">{p.c.type || "DM"}</span></td>
+                          <td className="p-2 font-bold text-slate-600">{teacherName(p.c.teacherId)}</td>
+                          <td className="p-2 font-bold text-slate-600">{p.aulas}</td>
+                          <td className="p-2 font-bold"><span className={p.dictOk ? "text-emerald-600" : "text-amber-600"}>{p.ditados}</span> <span className="text-slate-300">/ {weeks}</span></td>
+                          <td className="p-2 font-bold text-slate-600">{p.oral}</td>
+                          <td className="p-2">{stBadge(p.status, p.statusLabel)}</td>
+                          <td className="p-2 font-black">{p.delta < 0 ? <span className="text-red-500">{Math.abs(p.delta)} aula(s) atraso</span> : p.delta > 0 ? <span className="text-blue-600">{p.delta} aula(s) adianto</span> : <span className="text-slate-400">—</span>}</td>
+                          <td className="p-2"><button onClick={() => { setSelectedClass(p.c); setOriginView("admin_home"); setView("class_history"); }} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 flex items-center gap-1"><History size={13} /> Histórico</button></td>
+                        </tr>
+                      ))}
+                      {!perClass.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Sem turmas{viewSchool !== "all" ? ` em ${viewSchool}` : ""}.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Activity size={14} /> Estado das turmas</div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-red-50 rounded-2xl p-4 text-center border border-red-100"><p className="text-2xl font-black text-red-500">{behind}</p><p className="text-[9px] font-black uppercase text-slate-400 mt-1">Atrasadas</p></div>
+                  <div className="bg-green-50 rounded-2xl p-4 text-center border border-green-100"><p className="text-2xl font-black text-green-600">{on}</p><p className="text-[9px] font-black uppercase text-slate-400 mt-1">Em dia</p></div>
+                  <div className="bg-blue-50 rounded-2xl p-4 text-center border border-blue-100"><p className="text-2xl font-black text-blue-600">{ahead}</p><p className="text-[9px] font-black uppercase text-slate-400 mt-1">Adiantadas</p></div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><UserX size={14} /> Faltas por professor</div>
+                {perTeacher.some((p) => p.faltas > 0) ? perTeacher.filter((p) => p.faltas > 0).map((p) => barRow(p.t.name, p.faltas, maxFal, "bg-red-500")) : <div className="text-center py-4 text-emerald-600 font-bold text-sm">Sem faltas este mês.</div>}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ── CLASSES ── */}
         {tab === "classes" && (
           <div className="space-y-4 text-left">
@@ -719,7 +841,7 @@ const AdminDashboard = ({
                 placeholder="Pesquisar Turma..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
             {(() => {
-              const activeAll = classes.filter((c) => c.active !== false);
+              const activeAll = classes.filter((c) => c.active !== false && (viewSchool === "all" || c.school === viewSchool));
               let nBehind = 0, nOn = 0, nAhead = 0;
               activeAll.forEach((c) => { const s = calculateProgress(c.id, logs, lessonPlans, c).status; if (s === "BEHIND") nBehind++; else if (s === "AHEAD") nAhead++; else nOn++; });
               return (
@@ -730,31 +852,51 @@ const AdminDashboard = ({
                 </div>
               );
             })()}
-            <button onClick={() => setIsAddingCls(true)}
+            <button onClick={() => { setNewCls((p) => ({ ...p, school: viewSchool !== "all" ? viewSchool : "" })); setIsAddingCls(true); }}
               className="w-full p-5 bg-indigo-600 text-white rounded-[24px] font-black uppercase tracking-wider shadow-lg active:scale-95 flex items-center justify-center gap-2">
               <Plus size={20} /> Nova Turma
             </button>
             {isAddingCls && (
               <div className="bg-white p-6 rounded-[32px] shadow-2xl space-y-4 text-left border">
-                <input placeholder="Nome da Turma" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
-                  value={newCls.name} onChange={(e) => setNewCls({ ...newCls, name: e.target.value })} />
-                <input placeholder="Sala" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
-                  value={newCls.room} onChange={(e) => setNewCls({ ...newCls, room: e.target.value })} />
                 <select className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
                   value={newCls.teacherId} onChange={(e) => setNewCls({ ...newCls, teacherId: e.target.value })}>
                   <option value="">Docente Titular...</option>
                   {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
                 <select className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
+                  value={newCls.time} onChange={(e) => setNewCls({ ...newCls, time: e.target.value })}>
+                  <option value="">Hora...</option>
+                  {SUB_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input placeholder="Sala" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
+                  value={newCls.room} onChange={(e) => setNewCls({ ...newCls, room: e.target.value })} />
+                <div className="flex gap-2">
+                  <select className="flex-1 p-4 bg-slate-50 border rounded-2xl font-bold"
+                    value={newCls.school} onChange={(e) => setNewCls({ ...newCls, school: e.target.value })}>
+                    <option value="">Escola...</option>
+                    {SCHOOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <select className="flex-1 p-4 bg-slate-50 border rounded-2xl font-bold"
+                    value={newCls.type} onChange={(e) => setNewCls({ ...newCls, type: e.target.value })}>
+                    <option value="DM">DM</option>
+                    <option value="TK">TK</option>
+                  </select>
+                </div>
+                <select className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
                   value={newCls.lessonPlanId} onChange={(e) => setNewCls({ ...newCls, lessonPlanId: e.target.value })}>
                   <option value="">Plano de Livro...</option>
                   {lessonPlans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+                {newCls.teacherId && newCls.time && (
+                  <p className="text-[11px] font-bold text-indigo-600 px-1">Nome da turma: <span className="font-black">{teachers.find((t) => t.id === newCls.teacherId)?.name} • {newCls.time}</span></p>
+                )}
                 <button onClick={async () => {
-                  if (!newCls.name || !newCls.teacherId) return notify("Erro: Dados em falta!");
-                  await onAdd("classes", { ...newCls, active: true });
+                  if (!newCls.teacherId || !newCls.time) return notify("Erro: escolha professor e hora!");
+                  if (!newCls.school) return notify("Erro: escolha a escola!");
+                  const tName = teachers.find((t) => t.id === newCls.teacherId)?.name || "";
+                  await onAdd("classes", { name: `${tName} • ${newCls.time}`, time: newCls.time, room: newCls.room, teacherId: newCls.teacherId, lessonPlanId: newCls.lessonPlanId, school: newCls.school, type: newCls.type || "DM", active: true });
                   setIsAddingCls(false);
-                  setNewCls({ name: "", room: "", lessonPlanId: "", teacherId: "" });
+                  setNewCls({ time: "", room: "", lessonPlanId: "", teacherId: "", school: "", type: "DM" });
                   notify("Turma criada!");
                 }} className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-lg">
                   Gravar
@@ -770,9 +912,9 @@ const AdminDashboard = ({
                     className="cursor-pointer flex-1 min-w-0">
                     <p className="font-black text-slate-800 text-xl tracking-tighter leading-none truncate">{cls.name}</p>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
-                      {teachers.find((t) => t.id === cls.teacherId)?.name || "S/D"} • Sala {cls.room} • {lessonPlans.find((p) => p.id === cls.lessonPlanId)?.name || "sem plano"}
+                      {teachers.find((t) => t.id === cls.teacherId)?.name || "S/D"} • Sala {cls.room}{cls.school ? ` • ${cls.school}` : ""} • {cls.type || "DM"}
                     </p>
-                    <div className="mt-2 inline-flex"><Badge status={prog.status} label={prog.statusLabel} colorClass={prog.colorClass} /></div>
+                    <div className="mt-2 inline-flex gap-2 items-center"><Badge status={prog.status} label={prog.statusLabel} colorClass={prog.colorClass} /></div>
                   </div>
                   <button onClick={() => openAttendance(cls, { id: cls.teacherId })}
                     className="p-2 rounded-xl bg-slate-900 text-white mr-2 active:scale-90" title="Presenças">
@@ -780,7 +922,7 @@ const AdminDashboard = ({
                   </button>
                   <button onClick={() => {
                     if (editingClassId === cls.id) { setEditingClassId(null); }
-                    else { setEditingClassId(cls.id); setEditCls({ name: cls.name || "", room: cls.room || "", teacherId: cls.teacherId || "", lessonPlanId: cls.lessonPlanId || "" }); }
+                    else { setEditingClassId(cls.id); setEditCls({ time: cls.time || "", room: cls.room || "", teacherId: cls.teacherId || "", lessonPlanId: cls.lessonPlanId || "", school: cls.school || "", type: cls.type || "DM" }); }
                   }} className="p-2 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 active:scale-90 mr-2" title="Editar">
                     <Edit3 size={18} />
                   </button>
@@ -795,23 +937,41 @@ const AdminDashboard = ({
                 </div>
                 {editingClassId === cls.id && (
                   <div className="mt-4 space-y-3 bg-slate-50 rounded-2xl p-4 border">
-                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Nome</span>
-                      <input className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.name} onChange={(e) => setEditCls((p) => ({ ...p, name: e.target.value }))} /></div>
-                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Sala</span>
-                      <input className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.room} onChange={(e) => setEditCls((p) => ({ ...p, room: e.target.value }))} /></div>
                     <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Professor</span>
                       <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.teacherId} onChange={(e) => setEditCls((p) => ({ ...p, teacherId: e.target.value }))}>
                         <option value="">— nenhum —</option>{teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select></div>
+                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Hora</span>
+                      <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.time} onChange={(e) => setEditCls((p) => ({ ...p, time: e.target.value }))}>
+                        <option value="">— hora —</option>{SUB_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select></div>
+                    <div className="flex gap-2">
+                      <div className="flex-1"><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Escola</span>
+                        <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.school} onChange={(e) => setEditCls((p) => ({ ...p, school: e.target.value }))}>
+                          <option value="">—</option>{SCHOOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select></div>
+                      <div className="flex-1"><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Tipo</span>
+                        <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.type} onChange={(e) => setEditCls((p) => ({ ...p, type: e.target.value }))}>
+                          <option value="DM">DM</option><option value="TK">TK</option>
+                        </select></div>
+                    </div>
+                    <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Sala</span>
+                      <input className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.room} onChange={(e) => setEditCls((p) => ({ ...p, room: e.target.value }))} /></div>
                     <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Plano de aulas</span>
                       <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.lessonPlanId} onChange={(e) => setEditCls((p) => ({ ...p, lessonPlanId: e.target.value }))}>
                         <option value="">— sem plano —</option>{lessonPlans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                       </select></div>
+                    {editCls.teacherId && editCls.time && (
+                      <p className="text-[11px] font-bold text-indigo-600 px-1">Nome: <span className="font-black">{teachers.find((t) => t.id === editCls.teacherId)?.name} • {editCls.time}</span></p>
+                    )}
                     <button onClick={async () => {
                       const planChanged = (editCls.lessonPlanId || "") !== (cls.lessonPlanId || "");
+                      const tName = teachers.find((t) => t.id === editCls.teacherId)?.name || "";
+                      const name = (tName && editCls.time) ? `${tName} • ${editCls.time}` : cls.name;
                       await onUpdate("classes", cls.id, {
-                        name: editCls.name.trim() || cls.name, room: editCls.room.trim(),
+                        name, time: editCls.time || cls.time || "", room: editCls.room.trim(),
                         teacherId: editCls.teacherId, lessonPlanId: editCls.lessonPlanId,
+                        school: editCls.school || "", type: editCls.type || "DM",
                         ...(planChanged ? { planStartDate: getTodayStr() } : {}),
                       });
                       setEditingClassId(null);
@@ -893,6 +1053,9 @@ const AdminDashboard = ({
                       )}
                       <p className="text-[10px] font-bold text-slate-400 uppercase mt-1 tracking-widest">
                         {Number(t.rate || 0).toLocaleString()} AKZ/Hora
+                      </p>
+                      <p className="text-[11px] font-black text-green-600 mt-1">
+                        {logs.filter((l) => l.teacherId === t.id).length} aulas · {(logs.filter((l) => l.teacherId === t.id).length * (t.rate || 0)).toLocaleString()} AKZ
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -994,29 +1157,6 @@ const AdminDashboard = ({
         )}
 
         {/* ── PAYROLL ── */}
-        {tab === "payroll" && (
-          <div className="bg-white rounded-[40px] p-8 shadow-sm border text-left">
-            <div className="flex items-center gap-3 mb-8 border-b pb-6">
-              <DollarSign className="text-green-600" size={28} />
-              <h3 className="font-black text-slate-900 text-2xl tracking-tighter">Folha Mensal</h3>
-            </div>
-            <div className="space-y-4">
-              {teachers.map((t) => {
-                const myLogs = logs.filter((l) => l.teacherId === t.id);
-                const totalPay = myLogs.length * (t.rate || 0);
-                return (
-                  <div key={t.id} className="flex justify-between items-center p-5 bg-slate-50 rounded-[28px] border shadow-sm">
-                    <div>
-                      <p className="font-black text-slate-800 text-lg leading-none">{t.name}</p>
-                      <p className="text-xs text-indigo-600 font-bold mt-1 uppercase text-[9px]">{myLogs.length} aulas registradas</p>
-                    </div>
-                    <p className="font-black text-slate-900 text-xl">{totalPay.toLocaleString()} AKZ</p>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* ── ACCOUNTS ── */}
         {tab === "accounts" && (
@@ -1093,13 +1233,13 @@ const AdminDashboard = ({
             )}
             <div className="bg-white rounded-[32px] p-4 border divide-y shadow-sm">
               {accounts.length === 0 && <div className="p-6 text-sm text-slate-500 font-bold">Nenhuma conta registada ainda.</div>}
-              {accounts.map((a) => (
+              {accounts.filter((a) => viewSchool === "all" || (a.schools || []).includes(viewSchool)).map((a) => (
                 <div key={a.id} className="py-5 px-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-black text-slate-800 leading-none truncate">{a.name || "(sem nome)"}</p>
                       <p className="text-[10px] font-bold text-slate-400 uppercase mt-2 tracking-widest truncate">
-                        {a.email}{a.role === "admin" ? " • ADMIN" : a.role === "tuner" ? " • TUNER" : a.role === "teacher" ? " • PROFESSOR" : ""}{a.phone ? ` • ${a.phone}` : ""}
+                        {a.email}{a.role === "admin" ? " • ADMIN" : a.role === "tuner" ? " • TUNER" : a.role === "assistant" ? " • ASSISTENTE" : a.role === "teacher" ? " • PROFESSOR" : ""}{a.schools?.length ? ` • ${a.schools.join("/")}` : ""}{a.phone ? ` • ${a.phone}` : ""}
                       </p>
                       <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full mt-1 inline-block ${a.activated ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600"}`}>
                         {a.activated ? "Ativo" : "Pendente"}
@@ -1108,7 +1248,7 @@ const AdminDashboard = ({
                     <div className="flex items-center gap-2 shrink-0">
                       <button onClick={() => {
                         if (editingAccountId === a.id) { setEditingAccountId(null); }
-                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", role: a.role || "teacher", name: a.name || "" }); }
+                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", role: a.role || "teacher", name: a.name || "", schools: a.schools || [] }); }
                       }} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 ${a.activated ? "bg-slate-100 text-slate-500" : "bg-indigo-600 text-white shadow"}`}>
                         {a.activated ? "Editar" : "Aprovar"}
                       </button>
@@ -1135,6 +1275,21 @@ const AdminDashboard = ({
                           <option value="assistant">Assistente</option>
                           <option value="admin">Admin (Direção)</option>
                         </select>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Escola(s)</p>
+                        <div className="flex gap-2">
+                          {SCHOOLS.map((s) => {
+                            const on = (editAccount.schools || []).includes(s);
+                            return (
+                              <button key={s} type="button"
+                                onClick={() => setEditAccount((p) => ({ ...p, schools: on ? (p.schools || []).filter((x) => x !== s) : [...(p.schools || []), s] }))}
+                                className={`flex-1 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest border-2 ${on ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-400 border-slate-100"}`}>
+                                {s}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                       {editAccount.role !== "admin" && (
                         <div>
@@ -1164,6 +1319,7 @@ const AdminDashboard = ({
                           role: editAccount.role || "teacher",
                           teacherId,
                           name,
+                          schools: editAccount.schools || [],
                           activated: true,
                         });
                         setEditingAccountId(null);
@@ -1314,6 +1470,51 @@ const AdminDashboard = ({
             </div>
           );
         })()}
+
+        {/* ── PEDIDOS (Tuners + Assistente) ── */}
+        {tab === "pedidos" && (
+          <div className="space-y-4 text-left">
+            <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><UserCheck size={14} /> Exames orais (Tuners)</div>
+              {examReqs.length ? <div className="divide-y">{examReqs.slice().sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0"><p className="font-black text-slate-800 text-sm truncate">{r.absentName || r.teacherName} → {r.subName || "—"}</p><p className="text-[11px] font-bold text-slate-400">{fmtDatePt(r.date)} · {r.time} · {r.book} · {r.students} alunos {r.tunerName ? `· Tuner: ${r.tunerName}` : "· por assumir"}</p></div>
+                  <button onClick={async () => window.confirm("Apagar este pedido?") && (await onDeleteTunerRequest("exam", r.id))} className="text-slate-300 hover:text-red-500 shrink-0"><Trash2 size={16} /></button>
+                </div>
+              ))}</div> : <div className="text-center py-4 text-slate-400 font-bold text-sm">Sem exames orais.</div>}
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Repeat size={14} /> Recuperações (Tuners)</div>
+              {recoveryReqs.length ? <div className="divide-y">{recoveryReqs.slice().sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0"><p className="font-black text-slate-800 text-sm truncate">{r.teacherName}</p><p className="text-[11px] font-bold text-slate-400">{fmtDatePt(r.date)} · {r.lessons} aula(s) · {r.students} alunos · {r.book} {r.tunerName ? `· Tuner: ${r.tunerName}` : "· por assumir"}</p></div>
+                  <button onClick={async () => window.confirm("Apagar este pedido?") && (await onDeleteTunerRequest("recovery", r.id))} className="text-slate-300 hover:text-red-500 shrink-0"><Trash2 size={16} /></button>
+                </div>
+              ))}</div> : <div className="text-center py-4 text-slate-400 font-bold text-sm">Sem recuperações.</div>}
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> Exames físicos (Assistente)</div>
+              {physExams.length ? <div className="divide-y">{physExams.slice().sort((a, b) => (b.examDate || "").localeCompare(a.examDate || "")).map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0"><p className="font-black text-slate-800 text-sm truncate">{r.teacherName} · {r.school}</p><p className="text-[11px] font-bold text-slate-400">{fmtDatePt(r.examDate)} · {r.time} · Livro {r.book} {r.half} · Sala {r.room} · {r.students} alunos {r.done ? "· tratado" : "· pendente"}</p></div>
+                  <button onClick={async () => window.confirm("Apagar este pedido?") && (await onDeleteAssistantRequest("exam", r.id))} className="text-slate-300 hover:text-red-500 shrink-0"><Trash2 size={16} /></button>
+                </div>
+              ))}</div> : <div className="text-center py-4 text-slate-400 font-bold text-sm">Sem exames físicos.</div>}
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> TK Exercise (Assistente)</div>
+              {tkExercises.length ? <div className="divide-y">{tkExercises.slice().sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0"><p className="font-black text-slate-800 text-sm truncate">{r.teacherName} · {r.school}</p><p className="text-[11px] font-bold text-slate-400">{fmtDatePt(r.date)} · Livro {r.book} · Older {r.older} · Younger {r.younger} {r.done ? "· tratado" : "· pendente"}</p></div>
+                  <button onClick={async () => window.confirm("Apagar este pedido?") && (await onDeleteAssistantRequest("tk", r.id))} className="text-slate-300 hover:text-red-500 shrink-0"><Trash2 size={16} /></button>
+                </div>
+              ))}</div> : <div className="text-center py-4 text-slate-400 font-bold text-sm">Sem TK Exercise.</div>}
+            </div>
+          </div>
+        )}
 
         {/* ── SETTINGS ── */}
         {tab === "settings" && (
@@ -1818,6 +2019,233 @@ const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRe
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ASSISTANT REQUESTS  —  teacher-facing (exame físico + TK exercise)
+// ═══════════════════════════════════════════════════════════════════════════════
+const AssistantRequests = ({ actingTeacher, schools = [], physExams, tkExercises, onAddAssistantRequest, notify, onBack }) => {
+  const tkAllowed = schools.some((s) => TK_SCHOOLS.includes(s));
+  const [tab, setTab] = useState("exam");
+  const [exam, setExam] = useState({ school: schools[0] || "", book: "", half: BOOK_HALVES[0], room: "", students: "", examDate: getTodayStr(), time: "", round: EXAM_ROUNDS[0] });
+  const [tk, setTk] = useState({ school: schools.find((s) => TK_SCHOOLS.includes(s)) || "", book: "", older: "", younger: "", date: getTodayStr(), note: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const meId = actingTeacher?.id, meName = actingTeacher?.name || "";
+  const inputCls = "w-full bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 outline-none font-bold text-sm focus:border-indigo-400";
+  const labelCls = "text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block";
+
+  const SchoolField = ({ value, onChange, allowed }) => (
+    <div><span className={labelCls}>Escola *</span>
+      <select className={inputCls} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Selecionar</option>
+        {(allowed || schools).map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    </div>
+  );
+
+  const submitExam = async () => {
+    setErr("");
+    const { school, book, half, room, students, examDate, time, round } = exam;
+    if (!school || !book || !room || !students || !examDate || !time || !round) { setErr("Preencha todos os campos."); return; }
+    setBusy(true);
+    try {
+      await onAddAssistantRequest("exam", { teacherId: meId, teacherName: meName, school, book, half, room, students, examDate, time, round, requestDate: getTodayStr() });
+      setExam({ school: schools[0] || "", book: "", half: BOOK_HALVES[0], room: "", students: "", examDate: getTodayStr(), time: "", round: EXAM_ROUNDS[0] });
+      notify("Pedido de exame físico enviado.");
+    } catch (e) { setErr("Erro: " + (e?.message || e)); } finally { setBusy(false); }
+  };
+  const submitTk = async () => {
+    setErr("");
+    const { school, book, older, younger, date } = tk;
+    if (!school || !book || (!older && !younger) || !date) { setErr("Preencha os campos (pelo menos uma quantidade)."); return; }
+    setBusy(true);
+    try {
+      await onAddAssistantRequest("tk", { teacherId: meId, teacherName: meName, school, book, older: older || "0", younger: younger || "0", date, note: tk.note || "" });
+      setTk({ school: schools.find((s) => TK_SCHOOLS.includes(s)) || "", book: "", older: "", younger: "", date: getTodayStr(), note: "" });
+      notify("Pedido de TK Exercise enviado.");
+    } catch (e) { setErr("Erro: " + (e?.message || e)); } finally { setBusy(false); }
+  };
+
+  const myExams = physExams.filter((r) => r.teacherId === meId).sort((a, b) => (b.examDate || "").localeCompare(a.examDate || ""));
+  const myTk = tkExercises.filter((r) => r.teacherId === meId).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const doneChip = (r) => r.done
+    ? <span className="px-2 py-1 rounded-full text-[9px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">Tratado</span>
+    : <span className="px-2 py-1 rounded-full text-[9px] font-black bg-amber-50 text-amber-700 border border-amber-200 uppercase">Pendente</span>;
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-24 text-left animate-in fade-in duration-300">
+      <header className="bg-white px-6 py-6 rounded-b-[40px] shadow-sm mb-4 border-b">
+        <div className="flex items-center gap-3">
+          {onBack && <button onClick={onBack} className="p-2 bg-slate-100 rounded-full active:scale-90" title="Voltar"><ArrowLeft size={20} /></button>}
+          <div className="flex-1">
+            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><ListChecks size={22} className="text-indigo-600" /> Assistente</h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Pedir exame físico ou TK Exercise</p>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          <button onClick={() => { setTab("exam"); setErr(""); }} className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest ${tab === "exam" ? "bg-slate-900 text-white shadow" : "bg-slate-100 text-slate-500"}`}>Exame físico</button>
+          {tkAllowed && <button onClick={() => { setTab("tk"); setErr(""); }} className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest ${tab === "tk" ? "bg-slate-900 text-white shadow" : "bg-slate-100 text-slate-500"}`}>TK Exercise</button>}
+        </div>
+      </header>
+
+      <main className="px-6 space-y-4">
+        {!schools.length && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm font-bold text-amber-700">A sua conta não tem escola definida. Peça ao administrador para a atribuir.</div>}
+        {tab === "exam" && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><Edit3 size={14} /> Novo pedido de exame físico</div>
+              {schools.length > 1 && <SchoolField value={exam.school} onChange={(v) => setExam((p) => ({ ...p, school: v }))} />}
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Livro *</span><input className={inputCls} placeholder="ex.: 12" value={exam.book} onChange={(e) => setExam((p) => ({ ...p, book: e.target.value }))} /></div>
+                <div><span className={labelCls}>Metade</span>
+                  <select className={inputCls} value={exam.half} onChange={(e) => setExam((p) => ({ ...p, half: e.target.value }))}>{BOOK_HALVES.map((h) => <option key={h} value={h}>{h}</option>)}</select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Sala *</span><input className={inputCls} placeholder="ex.: A" value={exam.room} onChange={(e) => setExam((p) => ({ ...p, room: e.target.value }))} /></div>
+                <div><span className={labelCls}>Nº alunos *</span><input type="number" min="1" className={inputCls} placeholder="ex.: 10" value={exam.students} onChange={(e) => setExam((p) => ({ ...p, students: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Data do exame *</span><input type="date" className={inputCls} value={exam.examDate} onChange={(e) => setExam((p) => ({ ...p, examDate: e.target.value }))} /></div>
+                <div><span className={labelCls}>Hora *</span>
+                  <select className={inputCls} value={exam.time} onChange={(e) => setExam((p) => ({ ...p, time: e.target.value }))}>
+                    <option value="">Selecionar</option>{SUB_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select></div>
+              </div>
+              <div><span className={labelCls}>Round *</span>
+                <select className={inputCls} value={exam.round} onChange={(e) => setExam((p) => ({ ...p, round: e.target.value }))}>{EXAM_ROUNDS.map((r) => <option key={r} value={r}>{r}</option>)}</select>
+              </div>
+              {err && <p className="text-red-500 text-sm font-bold">{err}</p>}
+              <button onClick={submitExam} disabled={busy || !schools.length} className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Pedir exame
+              </button>
+            </div>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> Os meus exames físicos</div>
+              {myExams.length ? <div className="divide-y">{myExams.map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div><p className="font-black text-slate-800 text-sm">{fmtDatePt(r.examDate)} · {r.time} · {r.school}</p><p className="text-[11px] font-bold text-slate-400">Livro {r.book} {r.half} · Sala {r.room} · {r.students} alunos · Round {r.round}</p></div>
+                  {doneChip(r)}
+                </div>
+              ))}</div> : <div className="text-center py-6 text-slate-400 font-bold text-sm">Sem pedidos de exame físico.</div>}
+            </div>
+          </>
+        )}
+
+        {tab === "tk" && tkAllowed && (
+          <>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><Edit3 size={14} /> Novo pedido de TK Exercise</div>
+              {schools.filter((s) => TK_SCHOOLS.includes(s)).length > 1 && <SchoolField value={tk.school} onChange={(v) => setTk((p) => ({ ...p, school: v }))} allowed={schools.filter((s) => TK_SCHOOLS.includes(s))} />}
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Livro *</span><input className={inputCls} placeholder="ex.: 1" value={tk.book} onChange={(e) => setTk((p) => ({ ...p, book: e.target.value }))} /></div>
+                <div><span className={labelCls}>Data *</span><input type="date" className={inputCls} value={tk.date} onChange={(e) => setTk((p) => ({ ...p, date: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className={labelCls}>Qtd Older *</span><input type="number" min="0" className={inputCls} placeholder="ex.: 10" value={tk.older} onChange={(e) => setTk((p) => ({ ...p, older: e.target.value }))} /></div>
+                <div><span className={labelCls}>Qtd Younger *</span><input type="number" min="0" className={inputCls} placeholder="ex.: 4" value={tk.younger} onChange={(e) => setTk((p) => ({ ...p, younger: e.target.value }))} /></div>
+              </div>
+              <div><span className={labelCls}>Nota</span><input className={inputCls} placeholder="opcional" value={tk.note} onChange={(e) => setTk((p) => ({ ...p, note: e.target.value }))} /></div>
+              {err && <p className="text-red-500 text-sm font-bold">{err}</p>}
+              <button onClick={submitTk} disabled={busy} className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Pedir TK Exercise
+              </button>
+            </div>
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> Os meus TK Exercise</div>
+              {myTk.length ? <div className="divide-y">{myTk.map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-2">
+                  <div><p className="font-black text-slate-800 text-sm">{fmtDatePt(r.date)} · Livro {r.book} · {r.school}</p><p className="text-[11px] font-bold text-slate-400">Older {r.older} · Younger {r.younger}{r.note ? ` · ${r.note}` : ""}</p></div>
+                  {doneChip(r)}
+                </div>
+              ))}</div> : <div className="text-center py-6 text-slate-400 font-bold text-sm">Sem pedidos de TK Exercise.</div>}
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ASSISTANT DEPARTMENT  —  assistant-facing (vê pedidos da sua escola)
+// ═══════════════════════════════════════════════════════════════════════════════
+const AssistantDepartment = ({ actingTeacher, schools = [], physExams, tkExercises, onUpdateAssistantRequest, onDeleteAssistantRequest, notify, onBack }) => {
+  const [tab, setTab] = useState("exam");
+  const [editId, setEditId] = useState(null);
+  const [edit, setEdit] = useState({ replacement: "", version: "", givenBy: "", obs: "" });
+  const exams = physExams.filter((r) => schools.includes(r.school)).sort((a, b) => (a.examDate || "").localeCompare(b.examDate || ""));
+  const tks = tkExercises.filter((r) => schools.includes(r.school)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const openExams = exams.filter((r) => !r.done).length;
+  const openTk = tks.filter((r) => !r.done).length;
+
+  const startEdit = (r) => { setEditId(r.id); setEdit({ replacement: r.replacement || "", version: r.version || "", givenBy: r.givenBy || "", obs: r.obs || "" }); };
+  const saveEdit = async (r) => { await onUpdateAssistantRequest("exam", r.id, { ...edit, done: true }); setEditId(null); notify("Exame atualizado."); };
+  const toggleTkDone = async (r) => { await onUpdateAssistantRequest("tk", r.id, { done: !r.done }); };
+  const delReq = async (kind, r) => { if (window.confirm("Remover este pedido?")) await onDeleteAssistantRequest(kind, r.id); };
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-24 text-left animate-in fade-in duration-300">
+      <header className="bg-white px-6 py-6 rounded-b-[40px] shadow-sm mb-4 border-b">
+        <div className="flex items-center gap-3">
+          {onBack && <button onClick={onBack} className="p-2 bg-slate-100 rounded-full active:scale-90" title="Voltar"><ArrowLeft size={20} /></button>}
+          <div className="flex-1">
+            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><ShieldCheck size={22} className="text-indigo-600" /> Assistente</h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Exames físicos e TK Exercise · {schools.join(" / ") || "sem escola"}</p>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          {[["exam", "Exames físicos", openExams], ["tk", "TK Exercise", openTk]].map(([k, label, count]) => (
+            <button key={k} onClick={() => setTab(k)} className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 ${tab === k ? "bg-indigo-600 text-white shadow" : "bg-slate-100 text-slate-500"}`}>
+              {label}{count > 0 && <span className="w-5 h-5 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center">{count}</span>}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="px-6 space-y-3">
+        {tab === "exam" && (exams.length ? exams.map((r) => (
+          <div key={r.id} className="bg-white rounded-[24px] p-5 border border-slate-100 shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-black text-slate-800">{r.teacherName} <span className="text-slate-400 font-bold">· {r.school}</span></p>
+                <p className="text-[12px] font-bold text-slate-500 mt-1">{fmtDatePt(r.examDate)} · {r.time} · Livro {r.book} {r.half} · Sala {r.room} · {r.students} alunos · Round {r.round}</p>
+                {(r.version || r.givenBy || r.replacement) && <p className="text-[11px] text-slate-400 mt-1">{r.replacement ? `Substituição: ${r.replacement} · ` : ""}{r.version ? `Versão ${r.version} · ` : ""}{r.givenBy ? `Entregue por ${r.givenBy}` : ""}{r.obs ? ` · ${r.obs}` : ""}</p>}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase border ${r.done ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{r.done ? "Tratado" : "Pendente"}</span>
+                <button onClick={() => (editId === r.id ? setEditId(null) : startEdit(r))} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-black uppercase">{r.done ? "Editar" : "Tratar"}</button>
+                <button onClick={() => delReq("exam", r)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button>
+              </div>
+            </div>
+            {editId === r.id && (
+              <div className="mt-3 grid grid-cols-2 gap-2 bg-slate-50 rounded-2xl p-3 border">
+                <input className="p-2 bg-white border rounded-lg text-sm font-bold col-span-2" placeholder="Substituição (Prof / Livro-metade / Sala)" value={edit.replacement} onChange={(e) => setEdit((p) => ({ ...p, replacement: e.target.value }))} />
+                <input className="p-2 bg-white border rounded-lg text-sm font-bold" placeholder="Versão (A/B)" value={edit.version} onChange={(e) => setEdit((p) => ({ ...p, version: e.target.value }))} />
+                <input className="p-2 bg-white border rounded-lg text-sm font-bold" placeholder="Entregue por" value={edit.givenBy} onChange={(e) => setEdit((p) => ({ ...p, givenBy: e.target.value }))} />
+                <input className="p-2 bg-white border rounded-lg text-sm font-bold col-span-2" placeholder="Obs" value={edit.obs} onChange={(e) => setEdit((p) => ({ ...p, obs: e.target.value }))} />
+                <button onClick={() => saveEdit(r)} className="col-span-2 p-2 bg-slate-900 text-white rounded-lg font-black uppercase text-[10px] tracking-widest">Guardar e marcar tratado</button>
+              </div>
+            )}
+          </div>
+        )) : <div className="bg-white rounded-[24px] p-8 border text-center text-slate-400 font-bold">Sem exames físicos.</div>)}
+
+        {tab === "tk" && (tks.length ? tks.map((r) => (
+          <div key={r.id} className="bg-white rounded-[24px] p-5 border border-slate-100 shadow-sm flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="font-black text-slate-800">{r.teacherName} <span className="text-slate-400 font-bold">· {r.school}</span></p>
+              <p className="text-[12px] font-bold text-slate-500 mt-1">{fmtDatePt(r.date)} · Livro {r.book} · Older {r.older} · Younger {r.younger}{r.note ? ` · ${r.note}` : ""}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => toggleTkDone(r)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase ${r.done ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-indigo-600 text-white"}`}>{r.done ? "Tratado" : "Marcar tratado"}</button>
+              <button onClick={() => delReq("tk", r)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button>
+            </div>
+          </div>
+        )) : <div className="bg-white rounded-[24px] p-8 border text-center text-slate-400 font-bold">Sem pedidos de TK Exercise.</div>)}
+      </main>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SIDEBAR  —  navegação por papel (logo · menus · conta)
 // ═══════════════════════════════════════════════════════════════════════════════
 const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNavigate, onOpenAdmin, onSwitchTeacher, onLogout }) => {
@@ -1826,8 +2254,10 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
     { label: "Turmas", icon: Layout, view: "teacher_home" },
     { label: "Substituições", icon: Repeat, view: "subs" },
     { label: "Tuners", icon: UserCheck, view: "tuners" },
+    { label: "Assistente", icon: ListChecks, view: "assistant" },
   ];
   if (role === "tuner") items.push({ label: "Tuner Department", icon: ShieldCheck, view: "tuner_dept" });
+  if (role === "assistant") items.push({ label: "Departamento Assistente", icon: ShieldCheck, view: "assistant_dept" });
 
   return (
     <>
@@ -1838,12 +2268,8 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
           <div className="flex justify-end mb-2">
             <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white" title="Fechar"><X size={18} /></button>
           </div>
-          <div className="bg-white rounded-2xl overflow-hidden shadow-sm">
-            <div className="flex h-1.5"><div className="flex-1 bg-[#F2C230]" /><div className="flex-1 bg-[#E8811F]" /></div>
-            <div className="px-4 py-3 text-center">
-              <p className="text-slate-800 text-lg leading-tight" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif", fontWeight: 400, letterSpacing: "0.5px" }}>Nancy&rsquo;s English School</p>
-            </div>
-            <div className="flex h-1.5"><div className="flex-1 bg-[#2B5FA8]" /><div className="flex-1 bg-[#E24B4A]" /></div>
+          <div className="overflow-hidden rounded-xl shadow-sm bg-white">
+            <img src={logoNancy} alt="Nancy's English School" className="w-full block scale-[1.06]" />
           </div>
         </div>
         {/* Menu */}
@@ -1869,7 +2295,7 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
         <div className="px-4 py-5 border-t border-slate-700/60">
           <div className="flex items-center gap-3 px-2 mb-3">
             <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center font-black text-xs">{subInitials(actingTeacher?.name || "?")}</div>
-            <div className="min-w-0"><p className="font-black text-sm truncate">{actingTeacher?.name || "—"}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{role === "admin" ? "Direção" : role === "tuner" ? "Tuner" : "Professor"}</p></div>
+            <div className="min-w-0"><p className="font-black text-sm truncate">{actingTeacher?.name || "—"}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{role === "admin" ? "Direção" : role === "tuner" ? "Tuner" : role === "assistant" ? "Assistente" : "Professor"}</p></div>
           </div>
           <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-black text-xs uppercase tracking-widest bg-slate-800 text-slate-300 hover:bg-slate-700">
             <LogOut size={16} /> Sair
@@ -1891,6 +2317,7 @@ export default function App() {
   const [pendingApproval, setPendingApproval] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [view,          setView]          = useState("login");
+  const [adminTab,      setAdminTab]      = useState("classes");
   const [originView,    setOriginView]    = useState("teacher_home");
   const [teachers,      setTeachers]      = useState([]);
   const [classes,       setClasses]       = useState([]);
@@ -1900,6 +2327,8 @@ export default function App() {
   const [subs,          setSubs]          = useState([]);
   const [examReqs,      setExamReqs]      = useState([]);
   const [recoveryReqs,  setRecoveryReqs]  = useState([]);
+  const [physExams,     setPhysExams]     = useState([]);
+  const [tkExercises,   setTkExercises]   = useState([]);
   const [adminPin,      setAdminPinState] = useState("200503");
   const [tabletMode,    setTabletModeState] = useState(false);
   const [session,       setSession]       = useState(null);
@@ -1914,9 +2343,11 @@ export default function App() {
   const [signupEmail,   setSignupEmail]   = useState("");
   const [signupPassword,setSignupPassword]= useState("");
   const [signupConfirm, setSignupConfirm] = useState("");
+  const [signupSchools, setSignupSchools] = useState([]);
   const [signupError,   setSignupError]   = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
   const signupNameRef = useRef("");
+  const signupSchoolsRef = useRef([]);
   const [notification,  setNotification]  = useState(null);
   const [teacherSearch, setTeacherSearch] = useState("");
   const [isPinModalOpen,setIsPinModalOpen]= useState(false);
@@ -1959,7 +2390,7 @@ export default function App() {
       return;
     }
     let resolved = 0;
-    const check = () => { if (++resolved >= 8) setDataLoading(false); };
+    const check = () => { if (++resolved >= 10) setDataLoading(false); };
     const timeout = setTimeout(() => setDataLoading(false), 8000);
 
     const unsubs = [
@@ -1971,6 +2402,8 @@ export default function App() {
       onSnapshot(collection(db, "substitutions"), (s) => { setSubs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "examRequests"), (s) => { setExamReqs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "recoveryRequests"), (s) => { setRecoveryReqs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
+      onSnapshot(collection(db, "physExamRequests"), (s) => { setPhysExams(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
+      onSnapshot(collection(db, "tkExerciseRequests"), (s) => { setTkExercises(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
     ];
 
     seedFirestoreIfEmpty().catch(console.error);
@@ -2001,6 +2434,7 @@ export default function App() {
               phone: "",
               role: "teacher",
               teacherId: "",
+              schools: signupSchoolsRef.current || [],
               activated: false,
               createdAt: serverTimestamp(),
             };
@@ -2010,7 +2444,7 @@ export default function App() {
         if (profile.activated) {
           setPendingApproval(null);
           setAuthedUid(firebaseUser.uid);
-          setSession({ accountId: firebaseUser.uid, teacherId: profile.teacherId, role: profile.role || "teacher" });
+          setSession({ accountId: firebaseUser.uid, teacherId: profile.teacherId, role: profile.role || "teacher", schools: profile.schools || [] });
         } else {
           // Conta criada mas ainda não aprovada — mostra ecrã de espera.
           setAuthedUid(null);
@@ -2119,6 +2553,22 @@ export default function App() {
     await deleteDoc(doc(db, col, id));
   }, []);
 
+  // ── Assistant requests CRUD → Firestore ─────────────────────────────────────
+  const onAddAssistantRequest = useCallback(async (kind, data) => {
+    const col = kind === "exam" ? "physExamRequests" : "tkExerciseRequests";
+    await addDoc(collection(db, col), { ...data, done: false, createdAt: serverTimestamp() });
+  }, []);
+
+  const onUpdateAssistantRequest = useCallback(async (kind, id, patch) => {
+    const col = kind === "exam" ? "physExamRequests" : "tkExerciseRequests";
+    await updateDoc(doc(db, col, id), patch);
+  }, []);
+
+  const onDeleteAssistantRequest = useCallback(async (kind, id) => {
+    const col = kind === "exam" ? "physExamRequests" : "tkExerciseRequests";
+    await deleteDoc(doc(db, col, id));
+  }, []);
+
   // ── Login / logout ──────────────────────────────────────────────────────────
   const handleLogin = useCallback(async () => {
     if (!loginEmail || !loginPassword) { setLoginError("Preencha email e senha."); return; }
@@ -2158,13 +2608,13 @@ export default function App() {
 
   const sidebarNavigate = useCallback((v) => {
     setSidebarOpen(false);
-    const teacherViews = ["teacher_home", "subs", "tuners", "tuner_dept"];
+    const teacherViews = ["teacher_home", "subs", "tuners", "tuner_dept", "assistant", "assistant_dept"];
     if (teacherViews.includes(v) && !actingTeacher) {
       setView("choose_teacher");
       notify("Escolha primeiro o professor.");
       return;
     }
-    if (["subs", "tuners", "tuner_dept"].includes(v)) setOriginView("teacher_home");
+    if (["subs", "tuners", "tuner_dept", "assistant", "assistant_dept"].includes(v)) setOriginView("teacher_home");
     setView(v);
   }, [actingTeacher, notify]);
 
@@ -2172,16 +2622,18 @@ export default function App() {
     setSignupError("");
     if (!signupName.trim()) return setSignupError("Insira o seu nome.");
     if (!signupEmail.trim()) return setSignupError("Insira o seu email.");
+    if (!signupSchools.length) return setSignupError("Escolha pelo menos uma escola.");
     if (signupPassword.length < 6) return setSignupError("Senha mínimo 6 caracteres.");
     if (signupPassword !== signupConfirm) return setSignupError("As senhas não coincidem.");
     setSignupLoading(true);
     try {
-      // Guarda o nome para o onAuthStateChanged o gravar no perfil pendente.
+      // Guarda o nome e escolas para o onAuthStateChanged os gravar no perfil pendente.
       signupNameRef.current = signupName.trim();
+      signupSchoolsRef.current = signupSchools;
       // Auto-registo: cria a conta. O perfil pendente e o ecrã de espera
       // são tratados pelo onAuthStateChanged.
       await createUserWithEmailAndPassword(auth, signupEmail.trim().toLowerCase(), signupPassword);
-      setSignupName(""); setSignupEmail(""); setSignupPassword(""); setSignupConfirm("");
+      setSignupName(""); setSignupEmail(""); setSignupPassword(""); setSignupConfirm(""); setSignupSchools([]);
     } catch (err) {
       if (err.code === "auth/email-already-in-use") {
         setSignupError("Este email já tem conta. Use o separador Entrar.");
@@ -2191,7 +2643,7 @@ export default function App() {
     } finally {
       setSignupLoading(false);
     }
-  }, [signupName, signupEmail, signupPassword, signupConfirm]);
+  }, [signupName, signupEmail, signupPassword, signupConfirm, signupSchools]);
 
   // ── Toast notification ──────────────────────────────────────────────────────
   const toast = notification ? (
@@ -2366,6 +2818,21 @@ export default function App() {
                     onChange={(e) => setSignupEmail(e.target.value)}
                     autoComplete="email" />
                 </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Escola(s) onde dá aulas</p>
+                  <div className="flex gap-2">
+                    {SCHOOLS.map((s) => {
+                      const on = signupSchools.includes(s);
+                      return (
+                        <button key={s} type="button"
+                          onClick={() => setSignupSchools((p) => on ? p.filter((x) => x !== s) : [...p, s])}
+                          className={`flex-1 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest border-2 transition-all ${on ? "bg-indigo-600 text-white border-indigo-600" : "bg-slate-50 text-slate-400 border-slate-50"}`}>
+                          {s}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 <div className="relative">
                   <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={22} />
                   <input type="password"
@@ -2407,10 +2874,6 @@ export default function App() {
               </div>
             )}
 
-            <button onClick={() => setIsPinModalOpen(true)}
-              className="w-full p-4 bg-amber-50 border border-amber-200 rounded-2xl font-black uppercase text-[10px] tracking-widest text-amber-700">
-              Abrir Direção por PIN
-            </button>
           </div>
         </div>
       </div>
@@ -2428,7 +2891,7 @@ export default function App() {
           open={sidebarOpen} onClose={() => setSidebarOpen(false)}
           session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
           onNavigate={sidebarNavigate}
-          onOpenAdmin={() => { setSidebarOpen(false); setIsPinModalOpen(true); }}
+          onOpenAdmin={() => { setSidebarOpen(false); setView("admin_home"); }}
           onSwitchTeacher={() => { setSidebarOpen(false); setTeacherSearch(""); }}
           onLogout={() => { setSidebarOpen(false); handleLogout(); }}
         />
@@ -2438,7 +2901,7 @@ export default function App() {
         </button>
         <div className="w-full max-w-md space-y-6">
           {canOpenAdmin && (
-            <button onClick={() => setIsPinModalOpen(true)}
+            <button onClick={() => setView("admin_home")}
               className="w-full bg-slate-900 text-white p-7 rounded-[40px] shadow-2xl flex items-center justify-center gap-6 active:scale-[0.98] transition-all border border-slate-700">
               <ShieldCheck size={36} className="text-indigo-400" />
               <div className="text-left">
@@ -2515,7 +2978,7 @@ export default function App() {
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
         onNavigate={sidebarNavigate}
-        onOpenAdmin={() => { setSidebarOpen(false); setIsPinModalOpen(true); }}
+        onOpenAdmin={() => { setSidebarOpen(false); setView("admin_home"); }}
         onSwitchTeacher={() => { setSidebarOpen(false); setView("choose_teacher"); setTeacherSearch(""); }}
         onLogout={() => { setSidebarOpen(false); handleLogout(); }}
       />
@@ -2535,7 +2998,7 @@ export default function App() {
           classes={classes} logs={logs} lessonPlans={lessonPlans}
           setView={setView} setSelectedClass={setSelectedClass} setOriginView={setOriginView}
           onSwitchTeacher={() => { setView("choose_teacher"); setTeacherSearch(""); }}
-          onOpenAdmin={() => setIsPinModalOpen(true)}
+          onOpenAdmin={() => setView("admin_home")}
           onOpenSubs={() => { setOriginView("teacher_home"); setView("subs"); }}
           onSetClassPlan={onSetClassPlan}
           onExit={() => {
@@ -2571,7 +3034,25 @@ export default function App() {
         />
       )}
 
-      {view === "admin_home" && (
+      {view === "assistant" && actingTeacher && (
+        <AssistantRequests
+          actingTeacher={actingTeacher} schools={session?.schools || []}
+          physExams={physExams} tkExercises={tkExercises}
+          onAddAssistantRequest={onAddAssistantRequest} notify={notify}
+          onBack={() => setView(originView || "teacher_home")}
+        />
+      )}
+
+      {view === "assistant_dept" && actingTeacher && (
+        <AssistantDepartment
+          actingTeacher={actingTeacher} schools={session?.schools || []}
+          physExams={physExams} tkExercises={tkExercises}
+          onUpdateAssistantRequest={onUpdateAssistantRequest} onDeleteAssistantRequest={onDeleteAssistantRequest} notify={notify}
+          onBack={() => setView(originView || "teacher_home")}
+        />
+      )}
+
+      {view === "admin_home" && session?.role === "admin" && (
         <AdminDashboard
           teachers={teachers} classes={classes} lessonPlans={lessonPlans}
           logs={logs} accounts={accounts} tabletMode={tabletMode}
@@ -2580,6 +3061,9 @@ export default function App() {
           adminPin={adminPin} setAdminPin={setAdminPin} setTabletMode={setTabletMode}
           onAdd={onAdd} onUpdate={onUpdate} onRemove={onRemove}
           subs={subs} onDeleteSub={onDeleteSub}
+          examReqs={examReqs} recoveryReqs={recoveryReqs} physExams={physExams} tkExercises={tkExercises}
+          onDeleteTunerRequest={onDeleteTunerRequest} onDeleteAssistantRequest={onDeleteAssistantRequest}
+          tab={adminTab} setTab={setAdminTab}
         />
       )}
 

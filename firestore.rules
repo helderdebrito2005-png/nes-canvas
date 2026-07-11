@@ -26,7 +26,9 @@ service cloud.firestore {
     match /lessonPlans/{docId}   { allow read, write: if request.auth != null; }
     match /logs/{docId}          { allow read, write: if request.auth != null; }
     match /substitutions/{docId}     { allow read, write: if request.auth != null; }
-    match /examRequests/{docId}      { allow read, write: if request.auth != null; }
-    match /recoveryRequests/{docId}  { allow read, write: if request.auth != null; }
+    match /examRequests/{docId}       { allow read, write: if request.auth != null; }
+    match /recoveryRequests/{docId}   { allow read, write: if request.auth != null; }
+    match /physExamRequests/{docId}   { allow read, write: if request.auth != null; }
+    match /tkExerciseRequests/{docId} { allow read, write: if request.auth != null; }
   }
 }
