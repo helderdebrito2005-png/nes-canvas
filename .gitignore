@@ -26,5 +26,5 @@ dist-ssr
 .claude/
 
 # Segredos de migração (nunca versionar)
-migration/service-account-*.json
-migration/users-export.json
+migration/
+.firebase/

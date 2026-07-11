@@ -30,5 +30,10 @@ service cloud.firestore {
     match /recoveryRequests/{docId}   { allow read, write: if request.auth != null; }
     match /physExamRequests/{docId}   { allow read, write: if request.auth != null; }
     match /tkExerciseRequests/{docId} { allow read, write: if request.auth != null; }
+
+    // Presenças: alunos sincronizados da folha + marcações + pagamentos.
+    match /rosters/{docId}    { allow read, write: if request.auth != null; }
+    match /attendance/{docId} { allow read, write: if request.auth != null; }
+    match /payments/{docId}   { allow read, write: if request.auth != null; }
   }
 }

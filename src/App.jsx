@@ -86,6 +86,129 @@ function openAttendance(cls, actingTeacher) {
   if (!w) window.location.href = url;
 }
 
+// ─── Presenças (attendance) — alunos vindos da "Lista dos Alunos" (CSV) ───────
+const WEEKDAYS_SHORT = ["Seg", "Ter", "Qua", "Qui", "Sex"];
+const OBS_REASONS = ["Doença", "Transporte", "Férias", "Outro"];
+const PAY_CLS = {
+  pago:     "bg-green-100 text-green-700 border-green-300",
+  fatura:   "bg-amber-100 text-amber-700 border-amber-300",
+  atrasado: "bg-red-100 text-red-700 border-red-300",
+  pendente: "bg-slate-50 text-slate-500 border-slate-200",
+};
+
+// CSV → linhas (respeita aspas, vírgulas e \n dentro de aspas)
+function parseCSV(text) {
+  const rows = []; let row = [], field = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += c;
+    } else {
+      if (c === '"') q = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (c !== "\r") field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+const normRosterName = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .toUpperCase().replace(/\bCLOSED\b/g, "").replace(/[^A-Z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+const normRosterTime = (raw) => {
+  const t = String(raw || "").trim().toLowerCase().replace(/\s+/g, "").replace("h", ":");
+  const m = t.match(/^(\d{1,2}):?(\d{2})$/);
+  return m ? `${String(Math.min(23, +m[1])).padStart(2, "0")}:${m[2]}` : "";
+};
+const studentKey = (nome) => "n_" + normRosterName(nome).replace(/[^A-Z0-9]+/g, "_");
+
+// Extrai blocos de turma da folha: cabeçalho (hora|turma|PROFESSOR) + alunos até "ALUNOS PARADOS"
+function parseRoster(text) {
+  const rows = parseCSV(text);
+  const out = []; let cur = null, parados = false;
+  const isHeader = (r) => /^\d{2}h\d{2}$/i.test(String(r[1] || "").trim())
+    && /^\d+[A-Za-z]$/.test(String(r[2] || "").trim()) && String(r[3] || "").trim() !== "";
+  for (const r of rows) {
+    if (isHeader(r)) {
+      let professor = String(r[3]).trim();
+      const closed = /closed/i.test(professor);
+      // CKC/Lobito trazem o tipo no nome ("DM CAROLINA", "TK ..."); separa-o.
+      const tm = professor.match(/^(TK|DM)\s+/i);
+      const type = tm ? tm[1].toUpperCase() : "DM";
+      if (tm) professor = professor.replace(/^(TK|DM)\s+/i, "").trim();
+      cur = { professor, time: normRosterTime(r[1]), turma: String(r[2]).trim(),
+        sala: String(r[0] || "").trim(), type, closed, students: [], parados: [] };
+      out.push(cur); parados = false; continue;
+    }
+    if (!cur) continue;
+    if (String(r[3] || "").toLowerCase().includes("alunos parados")) { parados = true; continue; }
+    const nome = String(r[3] || "").trim();
+    if (!nome) continue;
+    if (parados) { cur.parados.push(nome); continue; }
+    // Nome sempre na col D; o nº do aluno pode estar na col B ou C; ID na col A.
+    const nm = String(r[1] || "").trim().match(/^(\d+)(\.0)?$/) || String(r[2] || "").trim().match(/^(\d+)(\.0)?$/);
+    const hasId = /^[A-Za-z]?\d{3,}/.test(String(r[0] || "").trim());
+    if (!nm && !hasId) continue;
+    // Último mês pago: colunas 13–30 (0-based 12–29) com valor numérico (não "--")
+    let lastPaidCol = -1;
+    for (let ci = 12; ci <= 29; ci++) {
+      const v = String(r[ci] || "").trim();
+      if (v && v !== "--" && /\d/.test(v)) lastPaidCol = ci + 1;
+    }
+    cur.students.push({ num: nm ? +nm[1] : 0, nome, id: String(r[0] || "").trim(), lastPaidCol });
+  }
+  return out;
+}
+
+// Coluna do mês atual na folha (Jan=19 … Dez=30) e se o aluno está pago até lá
+const currentPaymentCol = () => 18 + (new Date().getMonth() + 1);
+const sheetPaid = (st) => !!st && st.lastPaidCol > 0 && st.lastPaidCol >= currentPaymentCol();
+const titleCasePt = (s) => String(s || "").toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()).trim();
+
+// Semana Seg–Sex a partir de uma data (tudo em UTC ao meio-dia p/ evitar desvios de fuso)
+function mondayOf(dateStr) {
+  const d = new Date(dateStr + "T12:00:00Z");
+  const wd = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() + (wd === 0 ? -6 : 1 - wd));
+  return d.toISOString().split("T")[0];
+}
+function weekDates(mondayStr) {
+  const base = new Date(mondayStr + "T12:00:00Z");
+  return Array.from({ length: 5 }, (_, i) => { const d = new Date(base); d.setUTCDate(base.getUTCDate() + i); return d.toISOString().split("T")[0]; });
+}
+// Estado de pagamento (réplica da lógica da folha V3)
+function paymentStatus(paid) {
+  if (paid) return "pago";
+  const hoje = new Date(), m = hoje.getMonth(), y = hoje.getFullYear();
+  const limite = new Date(y, m, 12);
+  const inicio = new Date(m === 0 ? y - 1 : y, m === 0 ? 11 : m - 1, 25);
+  if (hoje > limite) return "atrasado";
+  if (hoje >= inicio) return "fatura";
+  return "pendente";
+}
+// Aviso: 3 faltas seguidas (na semana carregada) sem observação
+function has3Absences(marks) {
+  let run = 0;
+  for (const v of marks) { if (String(v || "").startsWith("A")) { if (++run >= 3) return true; } else run = 0; }
+  return false;
+}
+
+// Resumo das presenças da semana atual de uma turma (a partir do estado global `attendance`)
+function classWeekAttendance(classId, attendance) {
+  const days = weekDates(mondayOf(getTodayStr()));
+  let present = 0, absent = 0; const reasons = [];
+  for (const dt of days) {
+    const d = (attendance || []).find((a) => a.id === `${classId}__${dt}`);
+    if (!d) continue;
+    const marks = d.marks || {}, obs = d.obs || {};
+    for (const k in marks) { if (marks[k] === "P") present++; else if (marks[k] === "A") absent++; }
+    for (const k in obs) { if (obs[k]) reasons.push(String(obs[k])); }
+  }
+  return { present, absent, marked: present + absent, reasons: [...new Set(reasons)] };
+}
+
 // ─── Seed Firestore once if empty ─────────────────────────────────────────────
 async function seedFirestoreIfEmpty() {
   const snap = await getDocs(collection(db, "teachers"));
@@ -217,7 +340,7 @@ const Badge = ({ status, label, colorClass }) => (
 );
 
 // Vista da recepção: todas as turmas, com seletor de escola, só leitura.
-const ReceptionView = ({ classes, teachers, logs, lessonPlans, setView, setSelectedClass, setOriginView }) => {
+const ReceptionView = ({ classes, teachers, logs, lessonPlans, attendance = [], setView, setSelectedClass, setOriginView }) => {
   const [school, setSchool] = useState("all");
   const [q, setQ] = useState("");
   const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "—";
@@ -258,6 +381,7 @@ const ReceptionView = ({ classes, teachers, logs, lessonPlans, setView, setSelec
         {list.map((c) => {
           const p = calculateProgress(c.id, logs, lessonPlans, c);
           const plan = lessonPlans.find((x) => x.id === c.lessonPlanId);
+          const att = classWeekAttendance(c.id, attendance);
           return (
             <div key={c.id} className="p-4 flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -268,11 +392,23 @@ const ReceptionView = ({ classes, teachers, logs, lessonPlans, setView, setSelec
                 <p className="text-[11px] font-bold text-slate-400 mt-1 truncate">
                   {teacherName(c.teacherId)}{c.school ? ` · ${c.school}` : ""}{plan ? ` · ${plan.name}` : ""}{p.lastEndPage ? ` · pág ${p.lastEndPage}` : ""}
                 </p>
+                {att.marked > 0 && (
+                  <p className="text-[10px] font-bold mt-1 truncate">
+                    <span className="text-emerald-600">{att.present}P</span> · <span className="text-red-500">{att.absent}F</span> esta semana
+                    {att.reasons.length > 0 && <span className="text-slate-400"> · motivos: {att.reasons.join(", ")}</span>}
+                  </p>
+                )}
               </div>
-              <button onClick={() => { setSelectedClass(c); setOriginView("reception"); setView("class_history"); }}
-                className="shrink-0 flex items-center gap-1 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">
-                <History size={14} /> Histórico
-              </button>
+              <div className="shrink-0 flex items-center gap-2">
+                <button onClick={() => { setSelectedClass(c); setOriginView("reception"); setView("attendance"); }}
+                  className="flex items-center gap-1 px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">
+                  <Users size={14} /> Presenças
+                </button>
+                <button onClick={() => { setSelectedClass(c); setOriginView("reception"); setView("class_history"); }}
+                  className="flex items-center gap-1 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">
+                  <History size={14} /> Histórico
+                </button>
+              </div>
             </div>
           );
         })}
@@ -405,9 +541,9 @@ const TeacherHome = ({
                   {alreadyLoggedToday ? <CheckCircle2 size={18} /> : <PlusCircle size={18} />}
                   {alreadyLoggedToday ? "Registrada" : "Registar"}
                 </button>
-                <button onClick={() => openAttendance(cls, actingTeacher)}
+                <button onClick={() => { setSelectedClass(cls); setOriginView("teacher_home"); setView("attendance"); }}
                   className="flex-1 bg-emerald-50 text-emerald-700 rounded-2xl flex justify-center items-center border border-emerald-100 active:scale-95 font-black text-[10px] uppercase">
-                  Attendance
+                  Presenças
                 </button>
                 <button onClick={() => { setSelectedClass(cls); setOriginView("teacher_home"); setView("class_plan_view"); }}
                   className="flex-1 bg-amber-50 text-amber-600 rounded-2xl flex justify-center items-center border border-amber-100 active:scale-95" title="Plano">
@@ -549,10 +685,14 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
         <button onClick={() => setView(originView)} className="p-4 bg-slate-50 rounded-2xl active:scale-90 transition-all hover:bg-slate-100 shadow-sm">
           <ArrowLeft size={22} />
         </button>
-        <div>
+        <div className="flex-1">
           <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">Registar Aula</h2>
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[3px] leading-none">{selectedClass.name}</p>
         </div>
+        <button onClick={() => setView("attendance")}
+          className="px-4 py-3 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 flex items-center gap-1.5">
+          <Users size={14} /> Presenças
+        </button>
       </div>
 
       <div className="space-y-8 max-w-lg mx-auto">
@@ -690,12 +830,19 @@ const AdminDashboard = ({
   teachers, classes, lessonPlans, logs, accounts, tabletMode,
   notify, setView, setSelectedClass, setOriginView,
   adminPin, setAdminPin, setTabletMode,
+  rosterUrls = {}, setRosterUrls, syncRoster, revertSync,
   onAdd, onUpdate, onRemove,
   subs = [], onDeleteSub,
   examReqs = [], recoveryReqs = [], physExams = [], tkExercises = [],
   onDeleteTunerRequest, onDeleteAssistantRequest,
+  attendance = [], rosters = [], session,
   tab, setTab,
 }) => {
+  // Acesso restrito por escola: super-admin (todas as 3 ou nenhuma definida) faz tudo;
+  // admin com subconjunto só edita as suas escolas, o resto é só leitura.
+  const adminSchools = session?.schools || [];
+  const isSuperAdmin = adminSchools.length === 0 || SCHOOLS.every((s) => adminSchools.includes(s));
+  const canEditSchool = (school) => isSuperAdmin || adminSchools.includes(school);
   const [viewSchool, setViewSchool] = useState("all");
   const [subDirTab, setSubDirTab] = useState("records");
   const [subFilDate, setSubFilDate] = useState("all");
@@ -711,6 +858,11 @@ const AdminDashboard = ({
   const [isEditingPlan, setIsEditingPlan] = useState(false);
   const [activePlan, setActivePlan] = useState({ name: "", blocks: [] });
   const [newPinInput, setNewPinInput] = useState("");
+  const [analiseFilter, setAnaliseFilter] = useState("all"); // all|BEHIND|ON|AHEAD|noDict|noOral
+  const [urlDraft, setUrlDraft] = useState(rosterUrls);
+  const [syncing, setSyncing] = useState(false);
+  const [syncReport, setSyncReport] = useState(null);
+  useEffect(() => { setUrlDraft(rosterUrls || {}); }, [rosterUrls]);
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", roles: ["teacher"] });
   const [accountError, setAccountError] = useState("");
@@ -785,6 +937,7 @@ const AdminDashboard = ({
           {[
             { id: "classes",  label: "Turmas",     icon: Layout    },
             { id: "analises", label: "Análises",   icon: BarChart3 },
+            { id: "stats",    label: "Estatística", icon: Activity },
             { id: "teachers", label: "Staff",      icon: Briefcase },
             { id: "plans",    label: "Planos",     icon: BookOpen  },
             { id: "accounts", label: "Contas",     icon: UserCog   },
@@ -817,13 +970,27 @@ const AdminDashboard = ({
           const dcount = (l) => (Number.isFinite(l.dictationCount) ? l.dictationCount : (l.dictation ? 1 : 0));
           const ocount = (l) => (Number.isFinite(l.oralSkillCount) ? l.oralSkillCount : 0);
           const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "S/D";
+          const weekStart = mondayOf(getTodayStr());
+          const weekEnd = weekDates(weekStart)[4]; // sexta
           const perClass = cls.map((c) => {
             const cl = monthLogs.filter((l) => l.classId === c.id);
             const ditados = cl.reduce((a, l) => a + dcount(l), 0);
             const oral = cl.reduce((a, l) => a + ocount(l), 0);
+            const wl = logs.filter((l) => l.classId === c.id && l.date >= weekStart && l.date <= weekEnd);
+            const weekDict = wl.reduce((a, l) => a + dcount(l), 0);
+            const weekOral = wl.reduce((a, l) => a + ocount(l), 0);
             const p = calculateProgress(c.id, logs, lessonPlans, c);
-            return { c, aulas: cl.length, ditados, oral, status: p.status, statusLabel: p.statusLabel, delta: p.lessonDelta || 0, dictOk: ditados >= weeks };
+            return { c, aulas: cl.length, ditados, oral, weekDict, weekOral, status: p.status, statusLabel: p.statusLabel, delta: p.lessonDelta || 0, dictOk: ditados >= weeks };
           }).sort((a, b) => a.c.name.localeCompare(b.c.name));
+          const noDictWk = perClass.filter((p) => p.weekDict === 0).length;
+          const noOralWk = perClass.filter((p) => p.weekOral === 0).length;
+          const filtered = perClass.filter((p) =>
+            analiseFilter === "all" ? true :
+            analiseFilter === "noDict" ? p.weekDict === 0 :
+            analiseFilter === "noOral" ? p.weekOral === 0 :
+            analiseFilter === "ON" ? (p.status !== "BEHIND" && p.status !== "AHEAD") :
+            p.status === analiseFilter);
+          const filtLabel = { all: "Todas", BEHIND: "Atrasadas", ON: "Em dia", AHEAD: "Adiantadas", noDict: "Sem ditado esta semana", noOral: "Sem oral esta semana" }[analiseFilter];
           const perTeacher = teacherList.map((t) => {
             const tl = monthLogs.filter((l) => l.teacherId === t.id);
             const ditados = tl.reduce((a, l) => a + dcount(l), 0);
@@ -857,45 +1024,179 @@ const AdminDashboard = ({
                 {card(faltasMes, "Faltas", "text-amber-600")}
               </div>
 
+              {/* FILTROS (clicáveis) */}
+              {(() => {
+                const fBtn = (key, n, label, cls) => (
+                  <button onClick={() => setAnaliseFilter((f) => f === key ? "all" : key)}
+                    className={`rounded-2xl p-4 text-center border-2 transition-all active:scale-95 ${analiseFilter === key ? cls.on : cls.off}`}>
+                    <p className={`text-2xl font-black ${analiseFilter === key ? "" : cls.num}`}>{n}</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-80">{label}</p>
+                  </button>
+                );
+                return (
+                  <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
+                    {fBtn("BEHIND", behind, "Atrasadas", { on: "bg-red-500 text-white border-red-500", off: "bg-red-50 border-red-100", num: "text-red-500" })}
+                    {fBtn("ON", on, "Em dia", { on: "bg-green-600 text-white border-green-600", off: "bg-green-50 border-green-100", num: "text-green-600" })}
+                    {fBtn("AHEAD", ahead, "Adiantadas", { on: "bg-blue-600 text-white border-blue-600", off: "bg-blue-50 border-blue-100", num: "text-blue-600" })}
+                    {fBtn("noDict", noDictWk, "Sem ditado (semana)", { on: "bg-amber-500 text-white border-amber-500", off: "bg-amber-50 border-amber-100", num: "text-amber-600" })}
+                    {fBtn("noOral", noOralWk, "Sem oral (semana)", { on: "bg-violet-600 text-white border-violet-600", off: "bg-violet-50 border-violet-100", num: "text-violet-600" })}
+                  </div>
+                );
+              })()}
+
               {/* TURMA POR TURMA */}
               <div className="bg-white rounded-[28px] p-6 border shadow-sm">
-                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Layout size={14} /> Turma por turma ({fmtMonthPt(ym)})</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><Layout size={14} /> Turmas: {filtLabel} ({filtered.length})</div>
+                  {analiseFilter !== "all" && <button onClick={() => setAnaliseFilter("all")} className="text-[10px] font-black uppercase tracking-widest text-indigo-600">Limpar filtro ✕</button>}
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm min-w-[560px]">
                     <thead><tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b">
                       <th className="p-2">Turma</th><th className="p-2">Professor</th><th className="p-2">Aulas</th><th className="p-2">Ditados</th><th className="p-2">Oral</th><th className="p-2">Estado</th><th className="p-2">Atraso/Avanço</th><th className="p-2"></th>
                     </tr></thead>
                     <tbody>
-                      {perClass.map((p) => (
+                      {filtered.map((p) => (
                         <tr key={p.c.id} className="border-b last:border-0">
                           <td className="p-2 font-black text-slate-800">{p.c.name}<span className="text-[9px] text-slate-400 ml-1">{p.c.type || "DM"}</span></td>
                           <td className="p-2 font-bold text-slate-600">{teacherName(p.c.teacherId)}</td>
                           <td className="p-2 font-bold text-slate-600">{p.aulas}</td>
-                          <td className="p-2 font-bold"><span className={p.dictOk ? "text-emerald-600" : "text-amber-600"}>{p.ditados}</span> <span className="text-slate-300">/ {weeks}</span></td>
-                          <td className="p-2 font-bold text-slate-600">{p.oral}</td>
+                          <td className="p-2 font-bold"><span className={p.dictOk ? "text-emerald-600" : "text-amber-600"}>{p.ditados}</span> <span className="text-slate-300">/ {weeks}</span>{p.weekDict === 0 && <span className="ml-1 text-[8px] font-black text-amber-500">0 sem.</span>}</td>
+                          <td className="p-2 font-bold text-slate-600">{p.oral}{p.weekOral === 0 && <span className="ml-1 text-[8px] font-black text-violet-500">0 sem.</span>}</td>
                           <td className="p-2">{stBadge(p.status, p.statusLabel)}</td>
                           <td className="p-2 font-black">{p.delta < 0 ? <span className="text-red-500">{Math.abs(p.delta)} aula(s) atraso</span> : p.delta > 0 ? <span className="text-blue-600">{p.delta} aula(s) adianto</span> : <span className="text-slate-400">—</span>}</td>
                           <td className="p-2"><button onClick={() => { setSelectedClass(p.c); setOriginView("admin_home"); setView("class_history"); }} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 flex items-center gap-1"><History size={13} /> Histórico</button></td>
                         </tr>
                       ))}
-                      {!perClass.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Sem turmas{viewSchool !== "all" ? ` em ${viewSchool}` : ""}.</td></tr>}
+                      {!filtered.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Nenhuma turma {filtLabel.toLowerCase()}{viewSchool !== "all" ? ` em ${viewSchool}` : ""}.</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
 
               <div className="bg-white rounded-[28px] p-6 border shadow-sm">
-                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Activity size={14} /> Estado das turmas</div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-red-50 rounded-2xl p-4 text-center border border-red-100"><p className="text-2xl font-black text-red-500">{behind}</p><p className="text-[9px] font-black uppercase text-slate-400 mt-1">Atrasadas</p></div>
-                  <div className="bg-green-50 rounded-2xl p-4 text-center border border-green-100"><p className="text-2xl font-black text-green-600">{on}</p><p className="text-[9px] font-black uppercase text-slate-400 mt-1">Em dia</p></div>
-                  <div className="bg-blue-50 rounded-2xl p-4 text-center border border-blue-100"><p className="text-2xl font-black text-blue-600">{ahead}</p><p className="text-[9px] font-black uppercase text-slate-400 mt-1">Adiantadas</p></div>
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><UserX size={14} /> Faltas por professor</div>
+                {perTeacher.some((p) => p.faltas > 0) ? perTeacher.filter((p) => p.faltas > 0).map((p) => barRow(p.t.name, p.faltas, maxFal, "bg-red-500")) : <div className="text-center py-4 text-emerald-600 font-bold text-sm">Sem faltas este mês.</div>}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── ESTATÍSTICA ── */}
+        {tab === "stats" && (() => {
+          const inView = (school) => viewSchool === "all" || school === viewSchool;
+          const cls = classes.filter((c) => c.active !== false && inView(c.school));
+          const rosterOf = (id) => rosters.find((r) => r.id === id);
+          const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "S/D";
+          const planName = (id) => lessonPlans.find((p) => p.id === id)?.name || "Sem plano";
+          const studentsOf = (c) => rosterOf(c.id)?.students || [];
+          const allStudents = cls.flatMap((c) => studentsOf(c));
+          const nAlunos = allStudents.length;
+          const nPagos = allStudents.filter((st) => sheetPaid(st)).length;
+          const nAccounts = accounts.filter((a) => viewSchool === "all" || (a.schools || []).includes(viewSchool)).length;
+          const nProfs = new Set(cls.map((c) => c.teacherId).filter(Boolean)).size;
+          // por plano
+          const byPlan = {};
+          cls.forEach((c) => { const k = c.lessonPlanId || "__none__"; (byPlan[k] = byPlan[k] || []).push(c); });
+          const planRows = Object.entries(byPlan).map(([k, list]) => {
+            const deltas = list.map((c) => calculateProgress(c.id, logs, lessonPlans, c).lessonDelta || 0);
+            const avg = deltas.length ? Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length) : 0;
+            return { name: k === "__none__" ? "Sem plano" : planName(k), n: list.length, avg };
+          }).sort((a, b) => b.n - a.n);
+          // por escola (quando "todas")
+          const perSchool = SCHOOLS.map((s) => {
+            const sc = classes.filter((c) => c.active !== false && c.school === s);
+            const st = sc.flatMap((c) => rosterOf(c.id)?.students || []);
+            return { s, turmas: sc.length, alunos: st.length, pagos: st.filter((x) => sheetPaid(x)).length };
+          });
+          const scard = (n, label, color) => (
+            <div className="bg-white rounded-[24px] p-5 border text-center shadow-sm"><p className={`text-3xl font-black ${color}`}>{n}</p><p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{label}</p></div>
+          );
+          const stBadge = (status, label) => {
+            const c = status === "BEHIND" ? "bg-red-50 text-red-600 border-red-200" : status === "AHEAD" ? "bg-blue-50 text-blue-600 border-blue-200" : "bg-green-50 text-green-700 border-green-200";
+            return <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${c}`}>{label}</span>;
+          };
+          return (
+            <div className="space-y-4 text-left">
+              <div className="flex items-center justify-between px-1">
+                <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Estatística{viewSchool !== "all" ? ` · ${viewSchool}` : " · todas as escolas"}</p>
+                <button onClick={() => window.print()} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest active:scale-95">Imprimir</button>
+              </div>
+
+              {/* TOTAIS */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {scard(nAccounts, "Contas", "text-indigo-600")}
+                {scard(cls.length, "Turmas", "text-slate-800")}
+                {scard(nAlunos, "Alunos", "text-emerald-600")}
+                {scard(nProfs, "Professores", "text-blue-600")}
+                {scard(lessonPlans.length, "Planos", "text-violet-600")}
+              </div>
+
+              {/* PAGAMENTOS */}
+              <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><DollarSign size={14} /> Pagamentos (mês atual)</div>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="flex-1 h-4 bg-red-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${nAlunos ? Math.round(nPagos / nAlunos * 100) : 0}%` }} /></div>
+                  <span className="text-sm font-black text-slate-700">{nAlunos ? Math.round(nPagos / nAlunos * 100) : 0}%</span>
+                </div>
+                <p className="text-[12px] font-bold text-slate-500"><span className="text-emerald-600">{nPagos} pagos</span> · <span className="text-red-500">{nAlunos - nPagos} em atraso</span> de {nAlunos} alunos</p>
+              </div>
+
+              {/* POR ESCOLA (só em "todas") */}
+              {viewSchool === "all" && (
+                <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                  <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Layout size={14} /> Por escola</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {perSchool.map((p) => (
+                      <div key={p.s} className="bg-slate-50 rounded-2xl p-4 border text-center">
+                        <p className="font-black text-slate-800">{p.s}</p>
+                        <p className="text-[11px] font-bold text-slate-500 mt-1">{p.turmas} turmas · {p.alunos} alunos</p>
+                        <p className="text-[11px] font-bold text-emerald-600">{p.alunos ? Math.round(p.pagos / p.alunos * 100) : 0}% pagos</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* POR PLANO */}
+              <div className="bg-white rounded-[28px] p-6 border shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><BookOpen size={14} /> Turmas por plano de livro</div>
+                <div className="space-y-1.5">
+                  {planRows.map((p) => (
+                    <div key={p.name} className="flex items-center justify-between text-sm border-b last:border-0 py-1.5">
+                      <span className="font-bold text-slate-700 truncate">{p.name}</span>
+                      <span className="shrink-0 flex items-center gap-3">
+                        <span className="font-black text-slate-800">{p.n} turma(s)</span>
+                        <span className={`text-[11px] font-black ${p.avg < 0 ? "text-red-500" : p.avg > 0 ? "text-blue-600" : "text-slate-400"}`}>{p.avg < 0 ? `${Math.abs(p.avg)} atraso` : p.avg > 0 ? `${p.avg} adianto` : "em dia"}</span>
+                      </span>
+                    </div>
+                  ))}
+                  {!planRows.length && <p className="text-center text-slate-400 font-bold py-3">Sem turmas.</p>}
                 </div>
               </div>
 
+              {/* RELATÓRIO POR TURMA */}
               <div className="bg-white rounded-[28px] p-6 border shadow-sm">
-                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><UserX size={14} /> Faltas por professor</div>
-                {perTeacher.some((p) => p.faltas > 0) ? perTeacher.filter((p) => p.faltas > 0).map((p) => barRow(p.t.name, p.faltas, maxFal, "bg-red-500")) : <div className="text-center py-4 text-emerald-600 font-bold text-sm">Sem faltas este mês.</div>}
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><ListChecks size={14} /> Relatório por turma ({cls.length})</div>
+                <div className="grid md:grid-cols-2 gap-3">
+                  {cls.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((c) => {
+                    const p = calculateProgress(c.id, logs, lessonPlans, c);
+                    const att = classWeekAttendance(c.id, attendance);
+                    const nst = studentsOf(c).length;
+                    return (
+                      <div key={c.id} className="border rounded-2xl p-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-black text-slate-800 truncate">{c.name}</p>
+                          {stBadge(p.status, p.statusLabel)}
+                        </div>
+                        <p className="text-[11px] font-bold text-slate-400 mt-1">{teacherName(c.teacherId)}{c.school ? ` · ${c.school}` : ""} · {c.type || "DM"} · {nst} alunos</p>
+                        <p className="text-[11px] font-bold text-slate-600 mt-1">{planName(c.lessonPlanId)} · pág {p.lastEndPage || 0}</p>
+                        {att.marked > 0 && <p className="text-[10px] font-bold mt-1"><span className="text-emerald-600">{att.present}P</span> · <span className="text-red-500">{att.absent}F</span> (semana){att.reasons.length ? ` · ${att.reasons.join(", ")}` : ""}</p>}
+                      </div>
+                    );
+                  })}
+                  {!cls.length && <p className="text-center text-slate-400 font-bold py-3">Sem turmas{viewSchool !== "all" ? ` em ${viewSchool}` : ""}.</p>}
+                </div>
               </div>
             </div>
           );
@@ -921,10 +1222,12 @@ const AdminDashboard = ({
                 </div>
               );
             })()}
-            <button onClick={() => { setNewCls((p) => ({ ...p, school: viewSchool !== "all" ? viewSchool : "" })); setIsAddingCls(true); }}
-              className="w-full p-5 bg-indigo-600 text-white rounded-[24px] font-black uppercase tracking-wider shadow-lg active:scale-95 flex items-center justify-center gap-2">
-              <Plus size={20} /> Nova Turma
-            </button>
+            {SCHOOLS.some((s) => canEditSchool(s)) && (
+              <button onClick={() => { const def = canEditSchool(viewSchool) && viewSchool !== "all" ? viewSchool : SCHOOLS.find((s) => canEditSchool(s)) || ""; setNewCls((p) => ({ ...p, school: def })); setIsAddingCls(true); }}
+                className="w-full p-5 bg-indigo-600 text-white rounded-[24px] font-black uppercase tracking-wider shadow-lg active:scale-95 flex items-center justify-center gap-2">
+                <Plus size={20} /> Nova Turma
+              </button>
+            )}
             {isAddingCls && (
               <div className="bg-white p-6 rounded-[32px] shadow-2xl space-y-4 text-left border">
                 <select className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
@@ -943,7 +1246,7 @@ const AdminDashboard = ({
                   <select className="flex-1 p-4 bg-slate-50 border rounded-2xl font-bold"
                     value={newCls.school} onChange={(e) => setNewCls({ ...newCls, school: e.target.value })}>
                     <option value="">Escola...</option>
-                    {SCHOOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {SCHOOLS.filter((s) => canEditSchool(s)).map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                   <select className="flex-1 p-4 bg-slate-50 border rounded-2xl font-bold"
                     value={newCls.type} onChange={(e) => setNewCls({ ...newCls, type: e.target.value })}>
@@ -962,6 +1265,7 @@ const AdminDashboard = ({
                 <button onClick={async () => {
                   if (!newCls.teacherId || !newCls.time) return notify("Erro: escolha professor e hora!");
                   if (!newCls.school) return notify("Erro: escolha a escola!");
+                  if (!canEditSchool(newCls.school)) return notify("Sem permissão para criar turmas nesta escola.");
                   const tName = teachers.find((t) => t.id === newCls.teacherId)?.name || "";
                   await onAdd("classes", { name: `${tName} • ${newCls.time}`, time: newCls.time, room: newCls.room, teacherId: newCls.teacherId, lessonPlanId: newCls.lessonPlanId, school: newCls.school, type: newCls.type || "DM", active: true });
                   setIsAddingCls(false);
@@ -974,6 +1278,7 @@ const AdminDashboard = ({
             )}
             {filteredClasses.filter((c) => c.active !== false).map((cls) => {
               const prog = calculateProgress(cls.id, logs, lessonPlans, cls);
+              const att = classWeekAttendance(cls.id, attendance);
               return (
               <div key={cls.id} className="bg-white p-5 rounded-[32px] border text-left shadow-sm">
                 <div className="flex items-center justify-between">
@@ -984,25 +1289,35 @@ const AdminDashboard = ({
                       {teachers.find((t) => t.id === cls.teacherId)?.name || "S/D"} • Sala {cls.room}{cls.school ? ` • ${cls.school}` : ""} • {cls.type || "DM"}
                     </p>
                     <div className="mt-2 inline-flex gap-2 items-center"><Badge status={prog.status} label={prog.statusLabel} colorClass={prog.colorClass} /></div>
+                    {att.marked > 0 && (
+                      <p className="text-[10px] font-bold mt-2">
+                        <span className="text-slate-400 uppercase tracking-widest">Semana:</span> <span className="text-emerald-600">{att.present} presenças</span> · <span className="text-red-500">{att.absent} faltas</span>
+                        {att.reasons.length > 0 && <span className="text-slate-400"> · motivos: {att.reasons.join(", ")}</span>}
+                      </p>
+                    )}
                   </div>
-                  <button onClick={() => openAttendance(cls, { id: cls.teacherId })}
+                  <button onClick={() => { setSelectedClass(cls); setOriginView("admin_home"); setView("attendance"); }}
                     className="p-2 rounded-xl bg-slate-900 text-white mr-2 active:scale-90" title="Presenças">
                     <Users size={18} />
                   </button>
-                  <button onClick={() => {
-                    if (editingClassId === cls.id) { setEditingClassId(null); }
-                    else { setEditingClassId(cls.id); setEditCls({ time: cls.time || "", room: cls.room || "", teacherId: cls.teacherId || "", lessonPlanId: cls.lessonPlanId || "", school: cls.school || "", type: cls.type || "DM" }); }
-                  }} className="p-2 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 active:scale-90 mr-2" title="Editar">
-                    <Edit3 size={18} />
-                  </button>
-                  <button onClick={async () => window.confirm(`Arquivar "${cls.name}"? Deixa de aparecer ao professor, mas o histórico é mantido.`) && (await onUpdate("classes", cls.id, { active: false }))}
-                    className="p-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 active:scale-90 mr-2" title="Arquivar">
-                    <Archive size={18} />
-                  </button>
-                  <button onClick={async () => window.confirm(`Eliminar "${cls.name}" definitivamente? O histórico desta turma perde-se.`) && (await onRemove("classes", cls.id))}
-                    className="text-slate-200 hover:text-red-500 p-2" title="Eliminar">
-                    <Trash2 size={20} />
-                  </button>
+                  {canEditSchool(cls.school) ? (<>
+                    <button onClick={() => {
+                      if (editingClassId === cls.id) { setEditingClassId(null); }
+                      else { setEditingClassId(cls.id); setEditCls({ time: cls.time || "", room: cls.room || "", teacherId: cls.teacherId || "", lessonPlanId: cls.lessonPlanId || "", school: cls.school || "", type: cls.type || "DM" }); }
+                    }} className="p-2 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 active:scale-90 mr-2" title="Editar">
+                      <Edit3 size={18} />
+                    </button>
+                    <button onClick={async () => window.confirm(`Arquivar "${cls.name}"? Deixa de aparecer ao professor, mas o histórico é mantido.`) && (await onUpdate("classes", cls.id, { active: false }))}
+                      className="p-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 active:scale-90 mr-2" title="Arquivar">
+                      <Archive size={18} />
+                    </button>
+                    <button onClick={async () => window.confirm(`Eliminar "${cls.name}" definitivamente? O histórico desta turma perde-se.`) && (await onRemove("classes", cls.id))}
+                      className="text-slate-200 hover:text-red-500 p-2" title="Eliminar">
+                      <Trash2 size={20} />
+                    </button>
+                  </>) : (
+                    <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 bg-slate-100 px-2 py-1 rounded-lg flex items-center gap-1" title="Sem permissão de edição nesta escola"><Lock size={11} /> Só leitura</span>
+                  )}
                 </div>
                 {editingClassId === cls.id && (
                   <div className="mt-4 space-y-3 bg-slate-50 rounded-2xl p-4 border">
@@ -1017,7 +1332,7 @@ const AdminDashboard = ({
                     <div className="flex gap-2">
                       <div className="flex-1"><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Escola</span>
                         <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.school} onChange={(e) => setEditCls((p) => ({ ...p, school: e.target.value }))}>
-                          <option value="">—</option>{SCHOOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                          <option value="">—</option>{SCHOOLS.filter((s) => canEditSchool(s) || s === cls.school).map((s) => <option key={s} value={s}>{s}</option>)}
                         </select></div>
                       <div className="flex-1"><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Tipo</span>
                         <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm" value={editCls.type} onChange={(e) => setEditCls((p) => ({ ...p, type: e.target.value }))}>
@@ -1034,6 +1349,7 @@ const AdminDashboard = ({
                       <p className="text-[11px] font-bold text-indigo-600 px-1">Nome: <span className="font-black">{teachers.find((t) => t.id === editCls.teacherId)?.name} • {editCls.time}</span></p>
                     )}
                     <button onClick={async () => {
+                      if (!canEditSchool(editCls.school || cls.school)) return notify("Sem permissão para mover a turma para essa escola.");
                       const planChanged = (editCls.lessonPlanId || "") !== (cls.lessonPlanId || "");
                       const tName = teachers.find((t) => t.id === editCls.teacherId)?.name || "";
                       const name = (tName && editCls.time) ? `${tName} • ${editCls.time}` : cls.name;
@@ -1324,6 +1640,9 @@ const AdminDashboard = ({
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                      {(!isSuperAdmin && a.id === session?.accountId) ? (
+                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 bg-slate-100 px-2 py-1.5 rounded-lg flex items-center gap-1" title="Não pode editar a sua própria conta"><Lock size={11} /> A sua conta</span>
+                      ) : (<>
                       <button onClick={() => {
                         if (editingAccountId === a.id) { setEditingAccountId(null); }
                         else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", roles: getRoles(a), name: a.name || "", schools: a.schools || [] }); }
@@ -1334,6 +1653,7 @@ const AdminDashboard = ({
                         className="text-slate-200 hover:text-red-500">
                         <Trash2 size={18} />
                       </button>
+                      </>)}
                     </div>
                   </div>
                   {editingAccountId === a.id && (
@@ -1641,6 +1961,73 @@ const AdminDashboard = ({
               <div className="mt-4 p-4 bg-slate-50 rounded-2xl border text-[11px] font-bold text-slate-600 leading-relaxed">
                 Se estiver ON: não pede login e vai direto escolher professor. Sincroniza entre todos os dispositivos.
               </div>
+            </div>
+
+            <div className="border-t pt-8">
+              <div className="flex items-center gap-3 mb-4">
+                <Users className="text-indigo-600" size={22} />
+                <div>
+                  <p className="font-black text-slate-800">Alunos (Presenças)</p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">links CSV publicados da "Lista dos Alunos", por escola</p>
+                </div>
+              </div>
+              <div className="p-4 bg-indigo-50 rounded-2xl text-[11px] font-bold text-indigo-700 leading-relaxed mb-4">
+                Cola o link <span className="font-black">CSV publicado</span> (Ficheiro → Partilhar → Publicar na Web → CSV) de cada escola. Se a folha tiver <span className="font-black">várias abas</span> (ex.: nininha, mino), põe <span className="font-black">um link por linha</span>. Depois toca em <span className="font-black">Sincronizar</span>. Casa as turmas por <span className="font-black">professor + hora</span>.
+              </div>
+              <div className="space-y-3">
+                {SCHOOLS.map((s) => (
+                  <div key={s}>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">{s}</p>
+                    <textarea rows={2} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-xs resize-y" placeholder="Um link CSV por linha (uma linha por aba)"
+                      value={urlDraft[s] || ""} onChange={(e) => setUrlDraft((p) => ({ ...p, [s]: e.target.value }))} />
+                  </div>
+                ))}
+              </div>
+              <button onClick={async () => { await setRosterUrls(urlDraft); notify("Links guardados!"); }}
+                className="w-full mt-4 p-3 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95">
+                Guardar links
+              </button>
+              <div className="flex gap-2 mt-2">
+                <button disabled={syncing} onClick={async () => {
+                  await setRosterUrls(urlDraft);
+                  setSyncing(true); setSyncReport(null);
+                  try { const r = await syncRoster(true); setSyncReport(r); notify(`Pré-visualização: ${r.matched.length} turmas.`); }
+                  catch (e) { notify("Erro: " + (e.message || e)); }
+                  setSyncing(false);
+                }} className="flex-1 p-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2">
+                  <Search size={16} /> Pré-visualizar
+                </button>
+                <button disabled={syncing} onClick={async () => {
+                  if (!window.confirm("Isto cria/atualiza turmas, professores e alunos na base de dados. Continuar?")) return;
+                  await setRosterUrls(urlDraft);
+                  setSyncing(true); setSyncReport(null);
+                  try { const r = await syncRoster(false); setSyncReport(r); notify(`Sincronizado: ${r.matched.length} turmas.`); }
+                  catch (e) { notify("Erro ao sincronizar: " + (e.message || e)); }
+                  setSyncing(false);
+                }} className="flex-1 p-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {syncing ? <Loader2 size={16} className="animate-spin" /> : <Repeat size={16} />}
+                  {syncing ? "A processar…" : "Sincronizar"}
+                </button>
+              </div>
+              {syncReport && (
+                <div className={`mt-4 p-4 rounded-2xl border text-[11px] font-bold space-y-1 ${syncReport.dryRun ? "bg-slate-900 text-white border-slate-700" : "bg-slate-50"}`}>
+                  {syncReport.dryRun && <p className="text-amber-400 uppercase tracking-widest">Pré-visualização (nada foi gravado)</p>}
+                  <p className={syncReport.dryRun ? "text-slate-300" : "text-slate-700"}>{syncReport.schools.join(" · ")}</p>
+                  <p className={syncReport.dryRun ? "text-emerald-400" : "text-green-600"}>✓ {syncReport.matched.length} turmas · {syncReport.students} alunos</p>
+                  {syncReport.createdTeachers > 0 && <p className="text-indigo-400">{syncReport.dryRun ? "iria criar" : "criou"} {syncReport.createdTeachers} professores</p>}
+                  {syncReport.createdClasses > 0 && <p className="text-indigo-400">{syncReport.dryRun ? "iria criar" : "criou"} {syncReport.createdClasses} turmas</p>}
+                  {syncReport.updated > 0 && <p className={syncReport.dryRun ? "text-slate-400" : "text-slate-500"}>{syncReport.updated} turmas já existentes {syncReport.dryRun ? "seriam" : "foram"} atualizadas</p>}
+                </div>
+              )}
+              <button disabled={syncing} onClick={async () => {
+                if (!window.confirm("Reverter: apaga TODOS os alunos sincronizados (rosters) e as turmas/professores criados pela sincronização. As turmas que criaste à mão ficam. Continuar?")) return;
+                setSyncing(true);
+                try { const r = await revertSync(); setSyncReport(null); notify(`Revertido: ${r.rosters} rosters, ${r.classes} turmas, ${r.teachers} professores apagados.`); }
+                catch (e) { notify("Erro ao reverter: " + (e.message || e)); }
+                setSyncing(false);
+              }} className="w-full mt-2 p-3 bg-red-50 text-red-600 border border-red-200 rounded-2xl font-black uppercase text-[10px] tracking-widest active:scale-95 disabled:opacity-50">
+                Reverter última sincronização
+              </button>
             </div>
           </div>
         )}
@@ -2335,6 +2722,234 @@ const AssistantDepartment = ({ actingTeacher, schools = [], physExams, tkExercis
 // ═══════════════════════════════════════════════════════════════════════════════
 // SIDEBAR  —  navegação por papel (logo · menus · conta)
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── Presenças: grelha semanal por turma (alunos vindos da folha, marcação na app) ──
+const Attendance = ({ selectedClass, session, notify, setView, originView, onSyncClass }) => {
+  const cls = selectedClass;
+  const [roster, setRoster] = useState(null);
+  const [syncingOne, setSyncingOne] = useState(false);
+  const [weekBase, setWeekBase] = useState(getTodayStr());
+  const monday = mondayOf(weekBase);
+  const days = useMemo(() => weekDates(monday), [monday]);
+  const ym = monday.slice(0, 7);
+  const [att, setAtt] = useState({});
+  const [paid, setPaid] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [obsCtx, setObsCtx] = useState(null);
+  const [obsText, setObsText] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try { const d = await getDoc(doc(db, "rosters", cls.id)); if (alive) setRoster(d.exists() ? d.data() : "none"); }
+      catch { if (alive) setRoster("none"); }
+    })();
+    return () => { alive = false; };
+  }, [cls.id]);
+
+  useEffect(() => {
+    let alive = true; setLoading(true);
+    (async () => {
+      const map = {};
+      await Promise.all(days.map(async (dt) => {
+        try { const s = await getDoc(doc(db, "attendance", `${cls.id}__${dt}`)); map[dt] = s.exists() ? s.data() : { marks: {}, obs: {} }; }
+        catch { map[dt] = { marks: {}, obs: {} }; }
+      }));
+      let paidMap = {};
+      try { const p = await getDoc(doc(db, "payments", `${cls.id}__${ym}`)); if (p.exists()) paidMap = p.data().paid || {}; } catch {}
+      if (alive) { setAtt(map); setPaid(paidMap); setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [cls.id, monday]);
+
+  const students = roster && roster !== "none" ? (roster.students || []) : [];
+
+  const markOf = (key, date) => att[date]?.marks?.[key] || "";
+  const weekMarks = (key) => days.map((d) => markOf(key, d));
+  const weekObs = (key) => days.some((d) => (att[d]?.obs?.[key] || "").trim());
+
+  const toggle = async (st, date) => {
+    const key = studentKey(st.nome);
+    const cur = markOf(key, date);
+    const val = (!cur || cur.startsWith("A")) ? "P" : "A";
+    const dayDoc = { ...(att[date] || {}), marks: { ...(att[date]?.marks || {}), [key]: val }, obs: att[date]?.obs || {} };
+    setAtt((p) => ({ ...p, [date]: dayDoc }));
+    try { await setDoc(doc(db, "attendance", `${cls.id}__${date}`), { classId: cls.id, date, school: cls.school || "", marks: dayDoc.marks, by: session?.accountId || "", ts: serverTimestamp() }, { merge: true }); }
+    catch { notify("Falha ao gravar presença."); }
+  };
+
+  const openObs = (st) => {
+    const key = studentKey(st.nome);
+    let date = days[Math.min(4, Math.max(0, new Date().getDay() - 1))];
+    for (let i = days.length - 1; i >= 0; i--) if (markOf(key, days[i]).startsWith("A")) { date = days[i]; break; }
+    setObsText(""); setObsCtx({ key, name: st.nome, date });
+  };
+  const saveObs = async (reason) => {
+    if (!obsCtx) return;
+    const txt = (reason || obsText).trim(); if (!txt) { notify("Escreva o motivo."); return; }
+    const { key, date } = obsCtx;
+    const dayDoc = { ...(att[date] || {}), obs: { ...(att[date]?.obs || {}), [key]: txt } };
+    setAtt((p) => ({ ...p, [date]: dayDoc }));
+    setObsCtx(null); setObsText("");
+    try { await setDoc(doc(db, "attendance", `${cls.id}__${date}`), { classId: cls.id, date, obs: dayDoc.obs }, { merge: true }); } catch {}
+    notify("Motivo guardado.");
+  };
+
+  // Pago = override manual (se existir) senão o que vem da folha (último mês pago)
+  const isPaidOf = (st) => { const key = studentKey(st.nome); return (key in paid) ? paid[key] : sheetPaid(st); };
+  const togglePaid = async (st) => {
+    const key = studentKey(st.nome);
+    const next = { ...paid, [key]: !isPaidOf(st) };
+    setPaid(next);
+    try { await setDoc(doc(db, "payments", `${cls.id}__${ym}`), { classId: cls.id, ym, paid: next }, { merge: true }); } catch {}
+  };
+
+  const shiftWeek = (n) => { const d = new Date(monday + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n * 7); setWeekBase(d.toISOString().split("T")[0]); };
+
+  return (
+    <div className="max-w-5xl mx-auto p-5 pb-24">
+      <div className="flex items-center gap-3 mb-4">
+        <button onClick={() => setView(originView || "teacher_home")} className="p-2.5 bg-white border rounded-2xl shadow-sm active:scale-90"><ArrowLeft size={18} /></button>
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Presenças</p>
+          <h1 className="text-xl font-black tracking-tighter leading-none truncate">{cls.name}</h1>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between gap-2 mb-4">
+        <button onClick={() => shiftWeek(-1)} className="px-3 py-2 bg-slate-100 rounded-xl font-black text-slate-600 active:scale-90">‹</button>
+        <div className="text-center">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Semana</p>
+          <p className="font-black text-slate-800 text-sm">{fmtDatePt(days[0])} – {fmtDatePt(days[4])}</p>
+        </div>
+        <button onClick={() => shiftWeek(1)} className="px-3 py-2 bg-slate-100 rounded-xl font-black text-slate-600 active:scale-90">›</button>
+      </div>
+
+      {roster === "none" && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
+          <p className="font-black text-amber-700">Sem alunos sincronizados</p>
+          <p className="text-[12px] font-bold text-amber-600 mt-2 mb-4">Traz só os alunos desta turma da folha (casa por professor + hora).</p>
+          {onSyncClass && (
+            <button disabled={syncingOne} onClick={async () => {
+              setSyncingOne(true);
+              try {
+                const n = await onSyncClass(cls);
+                const d = await getDoc(doc(db, "rosters", cls.id));
+                setRoster(d.exists() ? d.data() : "none");
+                notify(`${n} alunos sincronizados.`);
+              } catch (e) { notify(e.message || "Erro ao sincronizar."); }
+              setSyncingOne(false);
+            }} className="inline-flex items-center gap-2 px-5 py-3 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 disabled:opacity-50">
+              {syncingOne ? <Loader2 size={16} className="animate-spin" /> : <Repeat size={16} />}
+              {syncingOne ? "A sincronizar…" : "Sincronizar esta turma"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {roster && roster !== "none" && (
+        loading ? <div className="text-center p-10 text-slate-400 font-bold flex items-center justify-center gap-2"><Loader2 className="animate-spin" size={18} /> A carregar…</div> : (
+          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="p-3 text-left font-black text-slate-500 text-[10px] uppercase tracking-widest sticky left-0 bg-slate-50 z-10">Aluno</th>
+                  {days.map((d, i) => (
+                    <th key={d} className="p-2 font-black text-slate-500 text-[10px] uppercase">{WEEKDAYS_SHORT[i]}<br /><span className="text-slate-400">{parseInt(d.split("-")[2], 10)}</span></th>
+                  ))}
+                  <th className="p-2 font-black text-slate-500 text-[10px] uppercase">Pagou</th>
+                  <th className="p-2 font-black text-slate-500 text-[10px] uppercase">Obs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {!students.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Nenhum aluno nesta turma.</td></tr>}
+                {students.map((st) => {
+                  const key = studentKey(st.nome);
+                  const paidNow = isPaidOf(st);
+                  const status = paymentStatus(paidNow);
+                  const warn = has3Absences(weekMarks(key)) && !weekObs(key);
+                  return (
+                    <tr key={key} className="border-t">
+                      <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[150px]">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate max-w-[160px]">{st.nome}</span>
+                          {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full whitespace-nowrap" title="3 faltas seguidas — informe o motivo">3 faltas</span>}
+                        </div>
+                      </td>
+                      {days.map((d) => {
+                        const v = markOf(key, d);
+                        return (
+                          <td key={d} className="p-1.5 text-center">
+                            <button onClick={() => toggle(st, d)}
+                              className={`w-11 h-10 rounded-xl font-black border-2 active:scale-90 transition-all ${v ? PAY_CLS[status] : "bg-white text-slate-300 border-slate-200"}`}>
+                              {v ? v.charAt(0) : "·"}
+                            </button>
+                          </td>
+                        );
+                      })}
+                      <td className="p-1.5 text-center">
+                        <button onClick={() => togglePaid(st)} title={status === "pago" ? "Pago" : status} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${paidNow ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-200 text-slate-300"}`}>💳</button>
+                      </td>
+                      <td className="p-1.5 text-center">
+                        <button onClick={() => openObs(st)} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${weekObs(key) ? "bg-indigo-100 border-indigo-300" : "bg-white border-slate-200 text-slate-300"}`}>📝</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+
+      {roster && roster !== "none" && !loading && (() => {
+        const faltas = students.map((st) => {
+          const key = studentKey(st.nome);
+          const dias = days.map((d, i) => markOf(key, d).startsWith("A") ? WEEKDAYS_SHORT[i] : null).filter(Boolean);
+          const motivo = days.map((d) => att[d]?.obs?.[key]).find(Boolean) || "";
+          return { nome: st.nome, dias, motivo };
+        }).filter((f) => f.dias.length);
+        if (!faltas.length) return null;
+        return (
+          <div className="bg-white rounded-2xl border shadow-sm p-4 mt-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Faltas desta semana</p>
+            <div className="space-y-2">
+              {faltas.map((f) => (
+                <div key={f.nome} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="font-bold text-slate-800 truncate">{f.nome}</span>
+                  <span className="shrink-0 flex items-center gap-2">
+                    <span className="text-[11px] font-black text-red-500">{f.dias.join(", ")}</span>
+                    {f.motivo ? <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">{f.motivo}</span>
+                      : <span className="text-[10px] font-bold text-amber-500">sem motivo</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {obsCtx && (
+        <div className="fixed inset-0 bg-black/30 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setObsCtx(null)}>
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
+            <p className="font-black text-slate-800">Motivo da falta — <span className="text-indigo-600">{obsCtx.name}</span></p>
+            <div className="grid grid-cols-2 gap-2">
+              {OBS_REASONS.filter((r) => r !== "Outro").map((r) => (
+                <button key={r} onClick={() => saveObs(r)} className="p-3 bg-slate-100 rounded-xl font-black text-slate-700 text-sm active:scale-95">{r}</button>
+              ))}
+            </div>
+            <input className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm" placeholder="Outro motivo…" maxLength={120}
+              value={obsText} onChange={(e) => setObsText(e.target.value)} />
+            <div className="flex gap-2">
+              <button onClick={() => setObsCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Cancelar</button>
+              <button onClick={() => saveObs()} className="flex-1 p-3 bg-slate-900 text-white rounded-xl font-black text-sm">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNavigate, onOpenAdmin, onSwitchTeacher, onLogout }) => {
   const roles = getRoles(session);
   const isTeaching = roles.some((r) => ["teacher", "tuner", "assistant"].includes(r));
@@ -2421,8 +3036,11 @@ export default function App() {
   const [recoveryReqs,  setRecoveryReqs]  = useState([]);
   const [physExams,     setPhysExams]     = useState([]);
   const [tkExercises,   setTkExercises]   = useState([]);
+  const [attendance,    setAttendance]    = useState([]);
+  const [rosters,       setRosters]       = useState([]);
   const [adminPin,      setAdminPinState] = useState("200503");
   const [tabletMode,    setTabletModeState] = useState(false);
+  const [rosterUrls,    setRosterUrlsState] = useState({});
   const [session,       setSession]       = useState(null);
   const [actingTeacher, setActingTeacher] = useState(null);
   const [selectedClass, setSelectedClass] = useState(null);
@@ -2461,6 +3079,103 @@ export default function App() {
     try { await updateDoc(doc(db, "settings", "main"), { tabletMode: val }); } catch {}
   }, []);
 
+  const setRosterUrls = useCallback(async (urls) => {
+    setRosterUrlsState(urls);
+    try { await setDoc(doc(db, "settings", "main"), { rosterUrls: urls }, { merge: true }); } catch {}
+  }, []);
+
+  // Sincroniza alunos da folha (CSV publicado) → cria professores/turmas em falta e grava rosters/{classId}
+  const syncRoster = useCallback(async (dryRun = false) => {
+    const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "";
+    const teacherByNorm = {};
+    teachers.forEach((t) => { teacherByNorm[normRosterName(t.name)] = t.id; });
+    // Casamento EXATO por nome normalizado (evita juntar "CLÁUDIA" com "CLÁUDIA BRAGA")
+    const findTeacher = (bn) => teacherByNorm[bn] || null;
+    const seenClassKeys = new Set();
+    const report = { dryRun, matched: [], schools: [], createdTeachers: 0, createdClasses: 0, updated: 0, students: 0 };
+    for (const school of SCHOOLS) {
+      const urls = String(rosterUrls[school] || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+      if (!urls.length) { report.schools.push(`${school}: sem link`); continue; }
+      const blocks = [];
+      for (const url of urls) {
+        let text;
+        try { text = await (await fetch(url)).text(); }
+        catch { report.schools.push(`${school}: erro de rede/CORS num link`); continue; }
+        if (text.includes("<!DOCTYPE")) { report.schools.push(`${school}: uma aba não publicada`); continue; }
+        blocks.push(...parseRoster(text).filter((b) => !b.closed && b.students.length));
+      }
+      for (const b of blocks) {
+        const bn = normRosterName(b.professor);
+        report.students += b.students.length;
+        // professor: usa existente ou cria
+        let tId = findTeacher(bn);
+        if (!tId) {
+          report.createdTeachers++;
+          if (dryRun) { teacherByNorm[bn] = "__new__"; tId = "__new__"; }
+          else { const ref = await addDoc(collection(db, "teachers"), { name: titleCasePt(b.professor), rate: 2000, active: true, viaSync: true }); tId = ref.id; teacherByNorm[bn] = tId; }
+        }
+        // turma: procura por professor+hora+escola (existente ou já criada) ou cria
+        const existing = classes.find((c) => c.time === b.time && c.school === school && normRosterName(teacherName(c.teacherId)) === bn);
+        const ckey = `${bn}__${b.time}__${school}`;
+        let cId = existing?.id;
+        if (cId) { report.updated++; }
+        else if (seenClassKeys.has(ckey)) { /* já contada nesta passagem */ }
+        else {
+          report.createdClasses++; seenClassKeys.add(ckey);
+          if (!dryRun) {
+            const ref = await addDoc(collection(db, "classes"), {
+              name: `${titleCasePt(b.professor)} • ${b.time}`, time: b.time, teacherId: tId,
+              school, type: b.type || "DM", room: b.sala || "", active: true, viaSync: true,
+            });
+            cId = ref.id;
+          }
+        }
+        if (!dryRun && cId) {
+          await setDoc(doc(db, "rosters", cId), {
+            classId: cId, school, professor: b.professor, time: b.time, turma: b.turma,
+            sala: b.sala, students: b.students, parados: b.parados, syncedAt: serverTimestamp(),
+          });
+        }
+        report.matched.push(`${b.professor} ${b.time} (${b.students.length} alunos)`);
+      }
+      report.schools.push(`${school}: ${blocks.length} turmas`);
+    }
+    return report;
+  }, [teachers, classes, rosterUrls]);
+
+  // Sincroniza SÓ uma turma (não cria nada) — casa por professor+hora na folha da escola dela
+  const syncOneClass = useCallback(async (cls) => {
+    const school = cls.school;
+    const urls = String(rosterUrls[school] || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    if (!urls.length) throw new Error(`Sem link CSV para ${school}. Mete em Direção → Tablet.`);
+    const tNorm = normRosterName(teachers.find((t) => t.id === cls.teacherId)?.name || "");
+    let found = null;
+    for (const url of urls) {
+      const text = await (await fetch(url)).text();
+      if (text.includes("<!DOCTYPE")) continue;
+      const b = parseRoster(text).filter((x) => !x.closed).find((x) => x.time === cls.time && normRosterName(x.professor) === tNorm);
+      if (b) { found = b; break; }
+    }
+    if (!found) throw new Error("Turma não encontrada na folha (confere professor + hora).");
+    await setDoc(doc(db, "rosters", cls.id), {
+      classId: cls.id, school, professor: found.professor, time: found.time, turma: found.turma,
+      sala: found.sala, students: found.students, parados: found.parados, syncedAt: serverTimestamp(),
+    });
+    return found.students.length;
+  }, [rosterUrls, teachers]);
+
+  // Reverte: apaga todos os rosters + as turmas/professores criados pela sincronização (viaSync)
+  const revertSync = useCallback(async () => {
+    const out = { rosters: 0, classes: 0, teachers: 0 };
+    const rs = await getDocs(collection(db, "rosters"));
+    for (const d of rs.docs) { await deleteDoc(doc(db, "rosters", d.id)); out.rosters++; }
+    const cs = await getDocs(query(collection(db, "classes"), where("viaSync", "==", true)));
+    for (const d of cs.docs) { await deleteDoc(doc(db, "classes", d.id)); out.classes++; }
+    const ts = await getDocs(query(collection(db, "teachers"), where("viaSync", "==", true)));
+    for (const d of ts.docs) { await deleteDoc(doc(db, "teachers", d.id)); out.teachers++; }
+    return out;
+  }, []);
+
   // ── Firestore real-time listeners (only after auth) ─────────────────────────
   const [authedUid, setAuthedUid] = useState(null);
 
@@ -2470,6 +3185,7 @@ export default function App() {
       if (s.exists()) {
         setAdminPinState(String(s.data().adminPin || "200503"));
         setTabletModeState(!!s.data().tabletMode);
+        setRosterUrlsState(s.data().rosterUrls || {});
       }
     });
     return () => unsubSettings();
@@ -2482,10 +3198,12 @@ export default function App() {
       return;
     }
     let resolved = 0;
-    const check = () => { if (++resolved >= 10) setDataLoading(false); };
+    const check = () => { if (++resolved >= 12) setDataLoading(false); };
     const timeout = setTimeout(() => setDataLoading(false), 8000);
 
     const unsubs = [
+      onSnapshot(query(collection(db, "attendance"), where("date", ">=", mondayOf(getTodayStr()))), (s) => { setAttendance(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
+      onSnapshot(collection(db, "rosters"), (s) => { setRosters(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "teachers"),    (s) => { setTeachers(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "classes"),     (s) => { setClasses(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
@@ -3155,7 +3873,7 @@ export default function App() {
 
       {view === "reception" && getRoles(session).includes("recepcionista") && (
         <ReceptionView
-          classes={classes} teachers={teachers} logs={logs} lessonPlans={lessonPlans}
+          classes={classes} teachers={teachers} logs={logs} lessonPlans={lessonPlans} attendance={attendance}
           setView={setView} setSelectedClass={setSelectedClass} setOriginView={setOriginView}
         />
       )}
@@ -3167,16 +3885,22 @@ export default function App() {
           notify={notify} setView={setView}
           setSelectedClass={setSelectedClass} setOriginView={setOriginView}
           adminPin={adminPin} setAdminPin={setAdminPin} setTabletMode={setTabletMode}
+          rosterUrls={rosterUrls} setRosterUrls={setRosterUrls} syncRoster={syncRoster} revertSync={revertSync}
           onAdd={onAdd} onUpdate={onUpdate} onRemove={onRemove}
           subs={subs} onDeleteSub={onDeleteSub}
           examReqs={examReqs} recoveryReqs={recoveryReqs} physExams={physExams} tkExercises={tkExercises}
           onDeleteTunerRequest={onDeleteTunerRequest} onDeleteAssistantRequest={onDeleteAssistantRequest}
+          attendance={attendance} rosters={rosters} session={session}
           tab={adminTab} setTab={setAdminTab}
         />
       )}
 
       {view === "class_history" && selectedClass && (
         <ClassHistory selectedClass={selectedClass} logs={logs} setView={setView} originView={originView} />
+      )}
+
+      {view === "attendance" && selectedClass && (
+        <Attendance selectedClass={selectedClass} session={session} notify={notify} setView={setView} originView={originView} onSyncClass={syncOneClass} />
       )}
 
       {view === "class_plan_view" && selectedClass && (
