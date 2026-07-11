@@ -39,6 +39,10 @@ const getYesterdayStr = () => {
 
 // ─── Substitutions helpers & constants ──────────────────────────────────────
 const SCHOOLS = ["CKC", "Benguela", "Lobito"];
+const ROLE_OPTIONS = [["teacher", "Professor"], ["tuner", "Tuner"], ["assistant", "Assistente"], ["recepcionista", "Recepcionista"], ["admin", "Admin (Direção)"]];
+const ROLE_LABELS = { teacher: "Professor", tuner: "Tuner", assistant: "Assistente", recepcionista: "Recepcionista", admin: "Admin" };
+// Normaliza cargos: usa o array `roles` novo, ou converte o `role` antigo (string).
+const getRoles = (x) => (Array.isArray(x?.roles) && x.roles.length ? x.roles : (x?.role ? [x.role] : ["teacher"]));
 const TK_SCHOOLS = ["CKC", "Lobito"]; // TK Exercise só nestas
 const EXAM_ROUNDS = ["1ª", "2ª", "3ª"];
 const BOOK_HALVES = ["1ª metade", "2ª metade"];
@@ -211,6 +215,71 @@ const Badge = ({ status, label, colorClass }) => (
     {label}
   </div>
 );
+
+// Vista da recepção: todas as turmas, com seletor de escola, só leitura.
+const ReceptionView = ({ classes, teachers, logs, lessonPlans, setView, setSelectedClass, setOriginView }) => {
+  const [school, setSchool] = useState("all");
+  const [q, setQ] = useState("");
+  const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "—";
+  const list = useMemo(() => {
+    const st = q.toLowerCase();
+    return classes
+      .filter((c) => c.active !== false)
+      .filter((c) => school === "all" || c.school === school)
+      .filter((c) => !st || (c.name || "").toLowerCase().includes(st) || teacherName(c.teacherId).toLowerCase().includes(st))
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [classes, teachers, school, q]);
+
+  return (
+    <div className="max-w-3xl mx-auto p-5 pb-24">
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Recepção</p>
+          <h1 className="text-2xl font-black tracking-tighter leading-none">Todas as turmas</h1>
+        </div>
+        <div className="flex gap-1 bg-slate-900 p-1 rounded-2xl">
+          {["all", ...SCHOOLS].map((s) => (
+            <button key={s} onClick={() => setSchool(s)}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${school === s ? "bg-white text-slate-900" : "bg-slate-800 text-slate-400"}`}>
+              {s === "all" ? "Todas" : s}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="relative mb-4">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+        <input placeholder="Procurar turma ou professor…" className="w-full p-3.5 pl-12 bg-white border rounded-2xl font-bold text-sm"
+          value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+
+      <div className="bg-white rounded-[28px] border divide-y shadow-sm">
+        {!list.length && <div className="p-6 text-sm text-slate-500 font-bold text-center">Nenhuma turma{school !== "all" ? ` em ${school}` : ""}.</div>}
+        {list.map((c) => {
+          const p = calculateProgress(c.id, logs, lessonPlans, c);
+          const plan = lessonPlans.find((x) => x.id === c.lessonPlanId);
+          return (
+            <div key={c.id} className="p-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="font-black text-slate-800 truncate">{c.name || "(sem nome)"}</p>
+                  <Badge status={p.status} label={p.statusLabel} colorClass={p.colorClass} />
+                </div>
+                <p className="text-[11px] font-bold text-slate-400 mt-1 truncate">
+                  {teacherName(c.teacherId)}{c.school ? ` · ${c.school}` : ""}{plan ? ` · ${plan.name}` : ""}{p.lastEndPage ? ` · pág ${p.lastEndPage}` : ""}
+                </p>
+              </div>
+              <button onClick={() => { setSelectedClass(c); setOriginView("reception"); setView("class_history"); }}
+                className="shrink-0 flex items-center gap-1 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">
+                <History size={14} /> Histórico
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 const TeacherHome = ({
   actingTeacher, tabletMode, classes, logs, lessonPlans,
@@ -643,10 +712,10 @@ const AdminDashboard = ({
   const [activePlan, setActivePlan] = useState({ name: "", blocks: [] });
   const [newPinInput, setNewPinInput] = useState("");
   const [isAddingAccount, setIsAddingAccount] = useState(false);
-  const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", role: "teacher" });
+  const [newAccount, setNewAccount] = useState({ teacherId: "", name: "", phone: "", email: "", password: "", roles: ["teacher"] });
   const [accountError, setAccountError] = useState("");
   const [editingAccountId, setEditingAccountId] = useState(null);
-  const [editAccount, setEditAccount] = useState({ teacherId: "", role: "teacher", name: "", schools: [] });
+  const [editAccount, setEditAccount] = useState({ teacherId: "", roles: ["teacher"], name: "", schools: [] });
 
   const filteredClasses = useMemo(() => {
     const st = searchTerm.toLowerCase();
@@ -1199,13 +1268,21 @@ const AdminDashboard = ({
                   <input placeholder="Email do professor" className="w-full p-4 pl-12 bg-slate-50 border rounded-2xl font-bold"
                     value={newAccount.email} onChange={(e) => setNewAccount({ ...newAccount, email: e.target.value })} />
                 </div>
-                <select className="w-full p-4 bg-slate-50 border rounded-2xl font-bold"
-                  value={newAccount.role} onChange={(e) => setNewAccount({ ...newAccount, role: e.target.value })}>
-                  <option value="teacher">Professor</option>
-                  <option value="tuner">Tuner</option>
-                  <option value="assistant">Assistente</option>
-                  <option value="admin">Admin (Direção)</option>
-                </select>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Cargos (pode escolher vários)</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {ROLE_OPTIONS.map(([val, label]) => {
+                      const on = (newAccount.roles || []).includes(val);
+                      return (
+                        <button key={val} type="button"
+                          onClick={() => setNewAccount((p) => ({ ...p, roles: on ? (p.roles || []).filter((x) => x !== val) : [...(p.roles || []), val] }))}
+                          className={`py-2 rounded-xl font-black text-[10px] uppercase tracking-widest border-2 ${on ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-400 border-slate-100"}`}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 {accountError && <p className="text-red-500 text-sm font-bold">{accountError}</p>}
                 <button onClick={async () => {
                   setAccountError("");
@@ -1218,10 +1295,11 @@ const AdminDashboard = ({
                       name: t?.name || "",
                       phone: String(newAccount.phone || "").trim(),
                       email: String(newAccount.email || "").trim().toLowerCase(),
-                      role: newAccount.role || "teacher",
+                      roles: newAccount.roles?.length ? newAccount.roles : ["teacher"],
+                      role: newAccount.roles?.[0] || "teacher",
                     });
                     setIsAddingAccount(false);
-                    setNewAccount({ teacherId: "", name: "", phone: "", email: "", password: "", role: "teacher" });
+                    setNewAccount({ teacherId: "", name: "", phone: "", email: "", password: "", roles: ["teacher"] });
                     notify("Email registado! O professor pode criar a senha.");
                   } catch (err) {
                     setAccountError(err.message || "Erro.");
@@ -1239,7 +1317,7 @@ const AdminDashboard = ({
                     <div className="min-w-0">
                       <p className="font-black text-slate-800 leading-none truncate">{a.name || "(sem nome)"}</p>
                       <p className="text-[10px] font-bold text-slate-400 uppercase mt-2 tracking-widest truncate">
-                        {a.email}{a.role === "admin" ? " • ADMIN" : a.role === "tuner" ? " • TUNER" : a.role === "assistant" ? " • ASSISTENTE" : a.role === "teacher" ? " • PROFESSOR" : ""}{a.schools?.length ? ` • ${a.schools.join("/")}` : ""}{a.phone ? ` • ${a.phone}` : ""}
+                        {a.email}{getRoles(a).length ? ` • ${getRoles(a).map((r) => (ROLE_LABELS[r] || r).toUpperCase()).join(" · ")}` : ""}{a.schools?.length ? ` • ${a.schools.join("/")}` : ""}{a.phone ? ` • ${a.phone}` : ""}
                       </p>
                       <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full mt-1 inline-block ${a.activated ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600"}`}>
                         {a.activated ? "Ativo" : "Pendente"}
@@ -1248,7 +1326,7 @@ const AdminDashboard = ({
                     <div className="flex items-center gap-2 shrink-0">
                       <button onClick={() => {
                         if (editingAccountId === a.id) { setEditingAccountId(null); }
-                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", role: a.role || "teacher", name: a.name || "", schools: a.schools || [] }); }
+                        else { setEditingAccountId(a.id); setEditAccount({ teacherId: a.teacherId || "", roles: getRoles(a), name: a.name || "", schools: a.schools || [] }); }
                       }} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 ${a.activated ? "bg-slate-100 text-slate-500" : "bg-indigo-600 text-white shadow"}`}>
                         {a.activated ? "Editar" : "Aprovar"}
                       </button>
@@ -1267,14 +1345,19 @@ const AdminDashboard = ({
                           value={editAccount.name} onChange={(e) => setEditAccount((p) => ({ ...p, name: e.target.value }))} />
                       </div>
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Cargo</p>
-                        <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
-                          value={editAccount.role} onChange={(e) => setEditAccount((p) => ({ ...p, role: e.target.value }))}>
-                          <option value="teacher">Professor</option>
-                          <option value="tuner">Tuner</option>
-                          <option value="assistant">Assistente</option>
-                          <option value="admin">Admin (Direção)</option>
-                        </select>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Cargos (pode escolher vários)</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {ROLE_OPTIONS.map(([val, label]) => {
+                            const on = (editAccount.roles || []).includes(val);
+                            return (
+                              <button key={val} type="button"
+                                onClick={() => setEditAccount((p) => ({ ...p, roles: on ? (p.roles || []).filter((x) => x !== val) : [...(p.roles || []), val] }))}
+                                className={`py-2 rounded-xl font-black text-[10px] uppercase tracking-widest border-2 ${on ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-400 border-slate-100"}`}>
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                       <div>
                         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Escola(s)</p>
@@ -1291,7 +1374,7 @@ const AdminDashboard = ({
                           })}
                         </div>
                       </div>
-                      {editAccount.role !== "admin" && (
+                      {(editAccount.roles || []).some((r) => ["teacher", "tuner", "assistant"].includes(r)) && (
                         <div>
                           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Professor associado</p>
                           <select className="w-full p-3 bg-white border rounded-xl font-bold text-sm"
@@ -1305,8 +1388,11 @@ const AdminDashboard = ({
                       <button onClick={async () => {
                         const name = (editAccount.name || "").trim();
                         if (!name) { notify("Escreva o nome."); return; }
+                        const roles = editAccount.roles || [];
+                        if (!roles.length) { notify("Escolha pelo menos um cargo."); return; }
+                        const needsTeacher = roles.some((r) => ["teacher", "tuner", "assistant"].includes(r));
                         let teacherId = editAccount.teacherId;
-                        if (editAccount.role !== "admin") {
+                        if (needsTeacher) {
                           if (!teacherId) { notify("Escolha ou crie o professor associado."); return; }
                           if (teacherId === "__new__") {
                             const ref = await onAdd("teachers", { name, rate: 2000, active: true });
@@ -1316,7 +1402,8 @@ const AdminDashboard = ({
                           teacherId = "";
                         }
                         await onUpdate("users", a.id, {
-                          role: editAccount.role || "teacher",
+                          roles,
+                          role: roles[0],
                           teacherId,
                           name,
                           schools: editAccount.schools || [],
@@ -2249,15 +2336,20 @@ const AssistantDepartment = ({ actingTeacher, schools = [], physExams, tkExercis
 // SIDEBAR  —  navegação por papel (logo · menus · conta)
 // ═══════════════════════════════════════════════════════════════════════════════
 const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNavigate, onOpenAdmin, onSwitchTeacher, onLogout }) => {
-  const role = session?.role;
-  const items = [
-    { label: "Turmas", icon: Layout, view: "teacher_home" },
-    { label: "Substituições", icon: Repeat, view: "subs" },
-    { label: "Tuners", icon: UserCheck, view: "tuners" },
-    { label: "Assistente", icon: ListChecks, view: "assistant" },
-  ];
-  if (role === "tuner") items.push({ label: "Tuner Department", icon: ShieldCheck, view: "tuner_dept" });
-  if (role === "assistant") items.push({ label: "Departamento Assistente", icon: ShieldCheck, view: "assistant_dept" });
+  const roles = getRoles(session);
+  const isTeaching = roles.some((r) => ["teacher", "tuner", "assistant"].includes(r));
+  const items = [];
+  if (isTeaching) {
+    items.push(
+      { label: "Turmas", icon: Layout, view: "teacher_home" },
+      { label: "Substituições", icon: Repeat, view: "subs" },
+      { label: "Tuners", icon: UserCheck, view: "tuners" },
+      { label: "Assistente", icon: ListChecks, view: "assistant" },
+    );
+  }
+  if (roles.includes("tuner")) items.push({ label: "Tuner Department", icon: ShieldCheck, view: "tuner_dept" });
+  if (roles.includes("assistant")) items.push({ label: "Departamento Assistente", icon: ShieldCheck, view: "assistant_dept" });
+  if (roles.includes("recepcionista")) items.push({ label: "Recepção", icon: BookOpen, view: "reception" });
 
   return (
     <>
@@ -2285,7 +2377,7 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
               <Users size={18} /> Trocar professor
             </button>
           )}
-          {role === "admin" && (
+          {roles.includes("admin") && (
             <button onClick={onOpenAdmin} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-black text-sm text-indigo-300 hover:bg-slate-800">
               <ShieldCheck size={18} /> Direção
             </button>
@@ -2295,7 +2387,7 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
         <div className="px-4 py-5 border-t border-slate-700/60">
           <div className="flex items-center gap-3 px-2 mb-3">
             <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center font-black text-xs">{subInitials(actingTeacher?.name || "?")}</div>
-            <div className="min-w-0"><p className="font-black text-sm truncate">{actingTeacher?.name || "—"}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{role === "admin" ? "Direção" : role === "tuner" ? "Tuner" : role === "assistant" ? "Assistente" : "Professor"}</p></div>
+            <div className="min-w-0"><p className="font-black text-sm truncate">{actingTeacher?.name || session?.name || "—"}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest truncate">{roles.map((r) => ROLE_LABELS[r] || r).join(" · ")}</p></div>
           </div>
           <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-black text-xs uppercase tracking-widest bg-slate-800 text-slate-300 hover:bg-slate-700">
             <LogOut size={16} /> Sair
@@ -2432,6 +2524,7 @@ export default function App() {
               email: (firebaseUser.email || "").toLowerCase(),
               name: firebaseUser.displayName || signupNameRef.current || "",
               phone: "",
+              roles: ["teacher"],
               role: "teacher",
               teacherId: "",
               schools: signupSchoolsRef.current || [],
@@ -2444,7 +2537,7 @@ export default function App() {
         if (profile.activated) {
           setPendingApproval(null);
           setAuthedUid(firebaseUser.uid);
-          setSession({ accountId: firebaseUser.uid, teacherId: profile.teacherId, role: profile.role || "teacher", schools: profile.schools || [] });
+          setSession({ accountId: firebaseUser.uid, teacherId: profile.teacherId, roles: getRoles(profile), role: getRoles(profile)[0], schools: profile.schools || [] });
         } else {
           // Conta criada mas ainda não aprovada — mostra ecrã de espera.
           setAuthedUid(null);
@@ -2473,9 +2566,16 @@ export default function App() {
     if (authLoading || dataLoading) return;
     if (tabletMode && view === "login")                        { setView("choose_teacher"); return; }
     if (!tabletMode && view === "choose_teacher" && !session)  { setView("login"); return; }
-    if (session && view === "login")                           { setView("teacher_home"); setOriginView("teacher_home"); return; }
+    if (session && view === "login") {
+      const roles = getRoles(session);
+      const isTeaching = roles.some((r) => ["teacher", "tuner", "assistant"].includes(r));
+      // Recepcionista/admin sem cargo de ensino aterram na sua própria área.
+      const landing = isTeaching ? "teacher_home" : roles.includes("recepcionista") ? "reception" : roles.includes("admin") ? "admin_home" : "teacher_home";
+      setView(landing); setOriginView(landing); return;
+    }
     // If on teacher_home but actingTeacher not found (teacherId mismatch), go to choose_teacher
-    if (session && view === "teacher_home" && !actingTeacher && teachers.length > 0) {
+    if (session && view === "teacher_home" && !actingTeacher && teachers.length > 0
+        && getRoles(session).some((r) => ["teacher", "tuner", "assistant"].includes(r))) {
       setView("choose_teacher");
     }
   }, [authLoading, dataLoading, session, tabletMode, view, actingTeacher, teachers]);
@@ -2488,7 +2588,8 @@ export default function App() {
         name:      data.name,
         email:     data.email,
         phone:     data.phone || "",
-        role:      data.role || "teacher",
+        roles:     data.roles?.length ? data.roles : [data.role || "teacher"],
+        role:      data.roles?.[0] || data.role || "teacher",
         activated: false,
         createdAt: serverTimestamp(),
       });
@@ -2883,7 +2984,7 @@ export default function App() {
   // ── Choose teacher (tablet / switch) ────────────────────────────────────────
   if (view === "choose_teacher") {
     const filtered = teachers.filter((t) => t.name.toLowerCase().includes(teacherSearch.toLowerCase()));
-    const canOpenAdmin = session?.role === "admin";
+    const canOpenAdmin = getRoles(session).includes("admin");
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
         {toast}<PinModal />
@@ -3005,7 +3106,7 @@ export default function App() {
             if (tabletMode) { setView("choose_teacher"); setActingTeacher(null); return; }
             handleLogout();
           }}
-          canOpenAdmin={session?.role === "admin"}
+          canOpenAdmin={getRoles(session).includes("admin")}
         />
       )}
 
@@ -3052,7 +3153,14 @@ export default function App() {
         />
       )}
 
-      {view === "admin_home" && session?.role === "admin" && (
+      {view === "reception" && getRoles(session).includes("recepcionista") && (
+        <ReceptionView
+          classes={classes} teachers={teachers} logs={logs} lessonPlans={lessonPlans}
+          setView={setView} setSelectedClass={setSelectedClass} setOriginView={setOriginView}
+        />
+      )}
+
+      {view === "admin_home" && getRoles(session).includes("admin") && (
         <AdminDashboard
           teachers={teachers} classes={classes} lessonPlans={lessonPlans}
           logs={logs} accounts={accounts} tabletMode={tabletMode}
