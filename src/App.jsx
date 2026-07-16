@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import logoNancy from "./assets/logo-nancy.png";
+import ideaLogo from "./assets/idea-logo.png";
 import { auth, db } from "./firebase";
 import {
   signInWithEmailAndPassword,
@@ -346,6 +347,14 @@ const Badge = ({ status, label, colorClass }) => (
     {status === "AHEAD"    && <TrendingUp   size={10} />}
     {status === "ON TRACK" && <CheckCircle2 size={10} />}
     {label}
+  </div>
+);
+
+// Marca de água do criador — canto inferior esquerdo, em todos os ecrãs.
+const Watermark = () => (
+  <div className="fixed bottom-2 right-2 z-20 flex flex-col items-end pointer-events-none select-none opacity-60">
+    <img src={ideaLogo} alt="idea" className="h-8 w-auto" draggable="false" />
+    <span className="text-[8px] font-bold text-slate-400 leading-none mt-0.5 mr-1">criado por Helder</span>
   </div>
 );
 
@@ -3586,6 +3595,7 @@ export default function App() {
   if (authLoading || dataLoading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white gap-8">
+        <Watermark />
         <Loader2 size={56} className="animate-spin text-indigo-500" />
         <div className="text-center animate-pulse">
           <p className="font-black text-xs uppercase tracking-[6px] opacity-70">Nancy Escola</p>
@@ -3599,7 +3609,7 @@ export default function App() {
   if (pendingApproval) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-        {toast}
+        {toast}<Watermark />
         <div className="w-full max-w-md">
           <div className="bg-white rounded-[56px] shadow-2xl p-12 border text-center space-y-6">
             <div className="mx-auto w-20 h-20 rounded-full bg-amber-100 flex items-center justify-center shadow-inner">
@@ -3628,7 +3638,7 @@ export default function App() {
   if (view === "login") {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-        {toast}<PinModal />
+        {toast}<PinModal /><Watermark />
         <div className="w-full max-w-md">
           <div className="bg-white rounded-[56px] shadow-2xl p-12 border text-center space-y-8">
             <h1 className="text-3xl font-black text-slate-900 tracking-tighter leading-none underline decoration-indigo-500 decoration-8 underline-offset-8">
@@ -3781,7 +3791,7 @@ export default function App() {
     const canOpenAdmin = getRoles(session).includes("admin");
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-        {toast}<PinModal />
+        {toast}<PinModal /><Watermark />
         <Sidebar
           open={sidebarOpen} onClose={() => setSidebarOpen(false)}
           session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
@@ -3867,7 +3877,7 @@ export default function App() {
   // ── Main authenticated views ────────────────────────────────────────────────
   return (
     <div className="antialiased font-sans min-h-screen bg-slate-50 text-slate-900 selection:bg-indigo-100">
-      {toast}<PinModal />
+      {toast}<PinModal /><Watermark />
 
       <Sidebar
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
