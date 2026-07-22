@@ -623,6 +623,11 @@ const ClassHistory = ({ selectedClass, logs, setView, originView }) => (
               <span className="text-[11px] font-black text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-xl uppercase border border-indigo-100 leading-none">{log.type}</span>
               <p className="text-lg font-bold text-slate-800 leading-none">Páginas {log.startPage} a {log.endPage}</p>
             </div>
+            {(log.readStart || log.readEnd) && (
+              <div className="mt-3 text-[10px] font-black text-emerald-600 flex items-center gap-1.5 uppercase tracking-tighter">
+                <BookOpen size={12} /> Leitura: <span className="text-slate-900">pág. {log.readStart || "—"} à {log.readEnd || "—"}</span>
+              </div>
+            )}
             {log.lastWord && (
               <div className="mt-3 text-[10px] font-black text-slate-400 flex items-center gap-1.5 uppercase tracking-tighter">
                 <Type size={12} /> Última: <span className="text-slate-900">{log.lastWord}</span>
@@ -686,6 +691,8 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
   const [typeCustom,     setTypeCustom]     = useState("");
   const [startPage,      setStartPage]      = useState(String((prog.lastEndPage || 0) + 1));
   const [endPage,        setEndPage]        = useState(String((prog.lastEndPage || 0) + 1));
+  const [readStart,      setReadStart]      = useState("");
+  const [readEnd,        setReadEnd]        = useState("");
   const [lastWord,       setLastWord]       = useState("");
   const [notes,          setNotes]          = useState("");
   const [isSub,          setIsSub]          = useState(false);
@@ -761,6 +768,24 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
           </div>
         </div>
 
+        <div className="p-5 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
+          <div className="flex items-center gap-2 mb-3"><div className="p-2 bg-emerald-100 text-emerald-600 rounded-xl"><BookOpen size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Leitura (Read)</p></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Da página</label>
+              <input type="number" min="0" placeholder="—"
+                className="w-full mt-1 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+                value={readStart} onChange={(e) => setReadStart(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">À página</label>
+              <input type="number" min="0" placeholder="—"
+                className="w-full mt-1 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+                value={readEnd} onChange={(e) => setReadEnd(e.target.value)} />
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-3">
           <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest leading-none">Última Palavra Dada</label>
           <div className="relative shadow-inner rounded-[32px]">
@@ -828,6 +853,8 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
             teacherId: finalTeacherId,
             teacherName: finalTeacherObj ? finalTeacherObj.name : "N/D",
             type: finalType, startPage: s, endPage: e,
+            readStart: String(readStart || "").trim(),
+            readEnd: String(readEnd || "").trim(),
             lastWord: String(lastWord || "").trim(),
             dictationCount: parseInt(dictationCount, 10) || 0,
             oralSkillCount: parseInt(oralSkillCount, 10) || 0,
