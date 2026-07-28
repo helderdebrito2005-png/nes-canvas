@@ -3125,10 +3125,14 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
       {roster && roster !== "none" && !loading && (
         <div className="mt-3">
           {addingOpen ? (
-            <div className="bg-white border rounded-2xl shadow-sm p-3 flex gap-2 items-center">
-              <input autoFocus value={addName} onChange={(e) => setAddName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addStudent(); }} placeholder="Nome do aluno novo" className="flex-1 p-2.5 bg-slate-50 border rounded-xl font-bold text-sm" />
-              <button onClick={addStudent} className="px-3 py-2.5 bg-indigo-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95">Adicionar</button>
-              <button onClick={() => { setAddingOpen(false); setAddName(""); }} className="px-3 py-2.5 bg-slate-100 text-slate-500 rounded-xl font-black text-[10px] uppercase tracking-widest">✕</button>
+            <div className="bg-white border rounded-2xl shadow-sm p-3">
+              <div className="flex items-center gap-2 mb-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600"><UserCheck size={14} /> Nome completo, como no BI</div>
+              <div className="flex gap-2 items-center">
+                <input autoFocus value={addName} onChange={(e) => setAddName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addStudent(); }} placeholder="Ex.: Ana Maria dos Santos Chihaluca" className="flex-1 p-2.5 bg-slate-50 border rounded-xl font-bold text-sm" />
+                <button onClick={addStudent} className="px-3 py-2.5 bg-indigo-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95">Adicionar</button>
+                <button onClick={() => { setAddingOpen(false); setAddName(""); }} className="px-3 py-2.5 bg-slate-100 text-slate-500 rounded-xl font-black text-[10px] uppercase tracking-widest">✕</button>
+              </div>
+              <p className="text-[10px] font-bold text-amber-600 mt-1.5 px-1">Escreve o nome <span className="font-black">exatamente como no Bilhete de Identidade</span> — é assim que a app o vai reconhecer quando entrar na folha oficial.</p>
             </div>
           ) : (
             <button onClick={() => setAddingOpen(true)} className="w-full p-3 bg-white border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95"><UserPlus size={16} /> Adicionar aluno</button>
