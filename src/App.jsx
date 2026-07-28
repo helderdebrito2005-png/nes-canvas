@@ -684,6 +684,9 @@ const ClassPlanView = ({ selectedClass, lessonPlans, logs, setView, originView }
 
 const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify, originView, onCreateLog }) => {
   const prog = calculateProgress(selectedClass.id, logs, lessonPlans, selectedClass);
+  const prevLog = prog.lastLog;
+  const prevDict = prevLog ? (Number.isFinite(prevLog.dictationCount) ? prevLog.dictationCount : (prevLog.dictation ? 1 : 0)) : null;
+  const prevOral = prevLog && Number.isFinite(prevLog.oralSkillCount) ? prevLog.oralSkillCount : (prevLog ? 0 : null);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [dictationCount, setDictationCount] = useState("");
   const [oralSkillCount, setOralSkillCount] = useState("");
@@ -798,15 +801,15 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
 
         <div className="grid grid-cols-2 gap-4">
           <div className="p-5 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
-            <div className="flex items-center gap-2 mb-3"><div className="p-2 bg-amber-100 text-amber-600 rounded-xl"><Mic2 size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Ditados</p></div>
-            <input type="number" min="0" placeholder="0"
-              className="w-full p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+            <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2"><div className="p-2 bg-amber-100 text-amber-600 rounded-xl"><Mic2 size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Ditados</p></div>{prevDict != null && <span className="text-[9px] font-black uppercase tracking-widest text-slate-300">ant.: {prevDict}</span>}</div>
+            <input type="number" min="0" placeholder={prevDict != null ? String(prevDict) : "0"}
+              className="w-full p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500 placeholder:text-slate-200"
               value={dictationCount} onChange={(e) => setDictationCount(e.target.value)} />
           </div>
           <div className="p-5 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
-            <div className="flex items-center gap-2 mb-3"><div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl"><Activity size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Oral skills</p></div>
-            <input type="number" min="0" placeholder="0"
-              className="w-full p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+            <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2"><div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl"><Activity size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Oral skills</p></div>{prevOral != null && <span className="text-[9px] font-black uppercase tracking-widest text-slate-300">ant.: {prevOral}</span>}</div>
+            <input type="number" min="0" placeholder={prevOral != null ? String(prevOral) : "0"}
+              className="w-full p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500 placeholder:text-slate-200"
               value={oralSkillCount} onChange={(e) => setOralSkillCount(e.target.value)} />
           </div>
         </div>
@@ -2905,14 +2908,32 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
 
   const shiftWeek = (n) => { const d = new Date(monday + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n * 7); setWeekBase(d.toISOString().split("T")[0]); };
 
+  const refreshList = async () => {
+    if (!onSyncClass) return;
+    setSyncingOne(true);
+    try {
+      const n = await onSyncClass(cls);
+      const d = await getDoc(doc(db, "rosters", cls.id));
+      setRoster(d.exists() ? d.data() : "none");
+      notify(`Lista atualizada: ${n} alunos.`);
+    } catch (e) { notify(e.message || "Erro ao atualizar."); }
+    setSyncingOne(false);
+  };
+
   return (
     <div className="max-w-5xl mx-auto p-5 pb-24">
       <div className="flex items-center gap-3 mb-4">
         <button onClick={() => setView(originView || "teacher_home")} className="p-2.5 bg-white border rounded-2xl shadow-sm active:scale-90"><ArrowLeft size={18} /></button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Presenças</p>
           <h1 className="text-xl font-black tracking-tighter leading-none truncate">{cls.name}</h1>
         </div>
+        {roster && roster !== "none" && onSyncClass && (
+          <button onClick={refreshList} disabled={syncingOne}
+            className="shrink-0 flex items-center gap-1.5 px-3 py-2 bg-white border rounded-2xl shadow-sm text-[10px] font-black uppercase tracking-widest text-slate-600 active:scale-95 disabled:opacity-50">
+            {syncingOne ? <Loader2 size={14} className="animate-spin" /> : <Repeat size={14} />} Atualizar
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between gap-2 mb-4">
@@ -2972,7 +2993,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
                       <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[150px]">
                         <div className="flex items-center gap-2">
                           <span className="truncate max-w-[160px]">{st.nome}</span>
-                          {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full whitespace-nowrap" title="3 faltas seguidas — informe o motivo">3 faltas</span>}
+                          {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full whitespace-nowrap" title="3 faltas seguidas — contactar o aluno">contactar o aluno</span>}
                         </div>
                       </td>
                       {days.map((d) => {
