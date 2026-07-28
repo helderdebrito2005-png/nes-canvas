@@ -461,7 +461,7 @@ const ReceptionView = ({ classes, teachers, logs, lessonPlans, attendance = [], 
 };
 
 const TeacherHome = ({
-  actingTeacher, tabletMode, classes, logs, lessonPlans,
+  actingTeacher, tabletMode, classes, logs, lessonPlans, rosters = [], subs = [],
   setView, setSelectedClass, setOriginView,
   onSwitchTeacher, onOpenAdmin, onOpenSubs, onExit, canOpenAdmin, onSetClassPlan,
 }) => {
@@ -474,6 +474,21 @@ const TeacherHome = ({
       .filter((c) => c.active !== false)
       .filter((c) => c.name.toLowerCase().includes(st));
   }, [classes, actingTeacher, searchTerm]);
+
+  const summary = useMemo(() => {
+    const active = classes.filter((c) => c.teacherId === actingTeacher?.id && c.active !== false);
+    let behind = 0, on = 0, ahead = 0, alunos = 0;
+    active.forEach((c) => {
+      const s = calculateProgress(c.id, logs, lessonPlans, c).status;
+      if (s === "BEHIND") behind++; else if (s === "AHEAD") ahead++; else on++;
+      alunos += rosters.find((x) => x.id === c.id)?.students?.length || 0;
+    });
+    const ym = getYM(getTodayStr());
+    const myLogs = logs.filter((l) => l.teacherId === actingTeacher?.id && getYM(l.date) === ym);
+    const ditados = myLogs.reduce((a, l) => a + (Number.isFinite(l.dictationCount) ? l.dictationCount : (l.dictation ? 1 : 0)), 0);
+    const faltas = subs.filter((s) => s.absentTeacherId === actingTeacher?.id && getYM(s.date) === ym).length;
+    return { turmas: active.length, behind, on, ahead, alunos, ditados, faltas };
+  }, [classes, actingTeacher, logs, lessonPlans, rosters, subs]);
 
   return (
     <div className="min-h-screen bg-slate-50 pb-24 text-slate-900 animate-in fade-in duration-300">
@@ -523,6 +538,27 @@ const TeacherHome = ({
       </header>
 
       <main className="px-6 space-y-6 text-left">
+        {/* Cabeçalho: resumo geral do professor */}
+        <div className="bg-white rounded-[28px] p-5 border border-slate-100 shadow-sm">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Resumo · {fmtMonthPt(getYM(getTodayStr()))}</p>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+            {[
+              { n: summary.turmas, l: "Turmas", c: "text-slate-800" },
+              { n: summary.alunos, l: "Alunos", c: "text-indigo-600" },
+              { n: summary.on, l: "Em dia", c: "text-green-600" },
+              { n: summary.behind, l: "Atrasadas", c: "text-red-500" },
+              { n: summary.ahead, l: "Adiantadas", c: "text-blue-600" },
+              { n: summary.ditados, l: "Ditados", c: "text-emerald-600" },
+            ].map((s) => (
+              <div key={s.l} className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                <p className={`text-2xl font-black ${s.c}`}>{s.n}</p>
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">{s.l}</p>
+              </div>
+            ))}
+          </div>
+          {summary.faltas > 0 && <p className="text-[11px] font-bold text-amber-600 mt-3">Faltas registadas este mês: {summary.faltas}</p>}
+        </div>
+
         {myClasses.map((cls) => {
           const prog = calculateProgress(cls.id, logs, lessonPlans, cls);
           const alreadyLoggedToday = logs.some((l) => l.classId === cls.id && l.date === getTodayStr());
@@ -610,7 +646,17 @@ const TeacherHome = ({
   );
 };
 
-const ClassHistory = ({ selectedClass, logs, setView, originView }) => (
+const ClassHistory = ({ selectedClass, logs, setView, originView, session, onEditLog }) => {
+  const roles = getRoles(session);
+  const isAdmin = roles.includes("admin");
+  const isTeaching = roles.some((r) => ["teacher", "tuner", "assistant"].includes(r));
+  const canEditLog = (log) => {
+    if (isAdmin) return true; // admin edita sempre
+    if (!isTeaching) return false;
+    const created = log.createdAt && log.createdAt.toDate ? log.createdAt.toDate().getTime() : null;
+    return created != null ? (Date.now() - created < 86400000) : (log.date >= getYesterdayStr());
+  };
+  return (
   <div className="min-h-screen bg-slate-50 pb-10 text-left animate-in slide-in-from-right duration-500">
     <header className="bg-white p-8 border-b flex items-center gap-6 sticky top-0 z-10 shadow-sm rounded-b-[40px]">
       <button onClick={() => setView(originView)} className="p-3 bg-slate-50 rounded-2xl active:scale-90 transition-all hover:bg-slate-100 shadow-sm">
@@ -632,7 +678,12 @@ const ClassHistory = ({ selectedClass, logs, setView, originView }) => (
                 <Calendar size={14} className="text-indigo-600" />
                 <span className="text-[11px] font-black text-indigo-900 uppercase tracking-widest leading-none">{log.date}</span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                {canEditLog(log) && (
+                  <button onClick={() => onEditLog && onEditLog(log)} className="text-[10px] font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-3 py-1 rounded-full uppercase tracking-tighter active:scale-95 flex items-center gap-1">
+                    <Edit3 size={11} /> Editar
+                  </button>
+                )}
                 {log.dictation && (
                   <div className="p-1.5 bg-amber-100 text-amber-600 rounded-lg shadow-sm" title="Dictation Feito">
                     <Mic2 size={12} />
@@ -662,7 +713,8 @@ const ClassHistory = ({ selectedClass, logs, setView, originView }) => (
         ))}
     </div>
   </div>
-);
+  );
+};
 
 const ClassPlanView = ({ selectedClass, lessonPlans, logs, setView, originView }) => {
   const plan = lessonPlans.find((p) => p.id === selectedClass.lessonPlanId);
@@ -706,22 +758,23 @@ const ClassPlanView = ({ selectedClass, lessonPlans, logs, setView, originView }
   );
 };
 
-const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify, originView, onCreateLog }) => {
+const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify, originView, onCreateLog, onUpdateLog, editLog }) => {
   const prog = calculateProgress(selectedClass.id, logs, lessonPlans, selectedClass);
+  const isEdit = !!editLog;
   const prevLog = prog.lastLog;
   const prevDict = prevLog ? (Number.isFinite(prevLog.dictationCount) ? prevLog.dictationCount : (prevLog.dictation ? 1 : 0)) : null;
   const prevOral = prevLog && Number.isFinite(prevLog.oralSkillCount) ? prevLog.oralSkillCount : (prevLog ? 0 : null);
-  const [customTypeMode, setCustomTypeMode] = useState(false);
-  const [dictationCount, setDictationCount] = useState("");
-  const [oralSkillCount, setOralSkillCount] = useState("");
-  const [typeSelect,     setTypeSelect]     = useState(prog.activeBlock?.type || "");
-  const [typeCustom,     setTypeCustom]     = useState("");
-  const [startPage,      setStartPage]      = useState(String((prog.lastEndPage || 0) + 1));
-  const [endPage,        setEndPage]        = useState(String((prog.lastEndPage || 0) + 1));
-  const [readStart,      setReadStart]      = useState("");
-  const [readEnd,        setReadEnd]        = useState("");
-  const [lastWord,       setLastWord]       = useState("");
-  const [notes,          setNotes]          = useState("");
+  const [customTypeMode, setCustomTypeMode] = useState(!!editLog?.isCustomType);
+  const [dictationCount, setDictationCount] = useState(editLog ? String(editLog.dictationCount ?? "") : "");
+  const [oralSkillCount, setOralSkillCount] = useState(editLog ? String(editLog.oralSkillCount ?? "") : "");
+  const [typeSelect,     setTypeSelect]     = useState(editLog && !editLog.isCustomType ? (editLog.type || "") : (prog.activeBlock?.type || ""));
+  const [typeCustom,     setTypeCustom]     = useState(editLog?.isCustomType ? (editLog.type || "") : "");
+  const [startPage,      setStartPage]      = useState(editLog ? String(editLog.startPage ?? "") : String((prog.lastEndPage || 0) + 1));
+  const [endPage,        setEndPage]        = useState(editLog ? String(editLog.endPage ?? "") : String((prog.lastEndPage || 0) + 1));
+  const [readStart,      setReadStart]      = useState(editLog ? String(editLog.readStart ?? "") : "");
+  const [readEnd,        setReadEnd]        = useState(editLog ? String(editLog.readEnd ?? "") : "");
+  const [lastWord,       setLastWord]       = useState(editLog ? String(editLog.lastWord ?? "") : "");
+  const [notes,          setNotes]          = useState(editLog ? String(editLog.notes ?? "") : "");
   const [isSub,          setIsSub]          = useState(false);
   const [subTeacherId,   setSubTeacherId]   = useState("");
 
@@ -739,7 +792,7 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
           <ArrowLeft size={22} />
         </button>
         <div className="flex-1">
-          <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">Registar Aula</h2>
+          <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">{isEdit ? "Editar Aula" : "Registar Aula"}</h2>
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[3px] leading-none">{selectedClass.name}</p>
         </div>
         <button onClick={() => setView("attendance")}
@@ -874,8 +927,8 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
           const finalTeacherId  = isSub ? subTeacherId : selectedClass.teacherId;
           const finalTeacherObj = teachers.find((t) => t.id === finalTeacherId);
 
-          await onCreateLog({
-            date: getTodayStr(),
+          const payload = {
+            date: isEdit ? editLog.date : getTodayStr(),
             classId: selectedClass.id, className: selectedClass.name,
             teacherId: finalTeacherId,
             teacherName: finalTeacherObj ? finalTeacherObj.name : "N/D",
@@ -888,11 +941,12 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
             dictation: (parseInt(dictationCount, 10) || 0) > 0,
             isCustomType: !!customTypeMode,
             notes: String(notes || "").trim(),
-          });
-          notify("Gravado!");
-          setView("teacher_home");
-        }} className={`w-full py-7 rounded-[32px] font-black shadow-2xl active:scale-95 transition-all text-xl uppercase tracking-[4px] border border-slate-700 text-center ${alreadyDone ? "bg-slate-200 text-slate-500" : "bg-slate-900 text-white"}`}>
-          Finalizar Aula
+          };
+          if (isEdit) { await onUpdateLog(editLog.id, payload); notify("Aula atualizada!"); }
+          else { await onCreateLog(payload); notify("Gravado!"); }
+          setView(originView || "teacher_home");
+        }} className={`w-full py-7 rounded-[32px] font-black shadow-2xl active:scale-95 transition-all text-xl uppercase tracking-[4px] border border-slate-700 text-center ${alreadyDone && !isEdit ? "bg-slate-200 text-slate-500" : "bg-slate-900 text-white"}`}>
+          {isEdit ? "Guardar Alterações" : "Finalizar Aula"}
         </button>
       </div>
     </div>
@@ -3324,6 +3378,8 @@ export default function App() {
   const [session,       setSession]       = useState(null);
   const [actingTeacher, setActingTeacher] = useState(null);
   const [selectedClass, setSelectedClass] = useState(null);
+  const [editLog,       setEditLog]       = useState(null);
+  useEffect(() => { if (view !== "log_lesson") setEditLog(null); }, [view]);
   const [loginTab,      setLoginTab]      = useState("login");
   const [loginEmail,    setLoginEmail]    = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -3612,7 +3668,11 @@ export default function App() {
   }, []);
 
   const onCreateLog = useCallback(async (log) => {
-    await addDoc(collection(db, "logs"), log);
+    await addDoc(collection(db, "logs"), { ...log, createdAt: serverTimestamp() });
+  }, []);
+
+  const onUpdateLog = useCallback(async (id, patch) => {
+    await updateDoc(doc(db, "logs", id), patch);
   }, []);
 
   const dismissNotification = useCallback(async (id) => {
@@ -4106,7 +4166,7 @@ export default function App() {
         <TeacherHome
           actingTeacher={actingTeacher}
           tabletMode={tabletMode}
-          classes={classes} logs={logs} lessonPlans={lessonPlans}
+          classes={classes} logs={logs} lessonPlans={lessonPlans} rosters={rosters} subs={subs}
           setView={setView} setSelectedClass={setSelectedClass} setOriginView={setOriginView}
           onSwitchTeacher={() => { setView("choose_teacher"); setTeacherSearch(""); }}
           onOpenAdmin={() => setView("admin_home")}
@@ -4191,7 +4251,8 @@ export default function App() {
       )}
 
       {view === "class_history" && selectedClass && (
-        <ClassHistory selectedClass={selectedClass} logs={logs} setView={setView} originView={originView} />
+        <ClassHistory selectedClass={selectedClass} logs={logs} setView={setView} originView={originView}
+          session={session} onEditLog={(log) => { setEditLog(log); setView("log_lesson"); }} />
       )}
 
       {view === "attendance" && selectedClass && (
@@ -4204,10 +4265,11 @@ export default function App() {
 
       {view === "log_lesson" && selectedClass && (
         <LogLesson
+          key={editLog?.id || "new"}
           selectedClass={selectedClass} teachers={teachers}
           lessonPlans={lessonPlans} logs={logs}
           setView={setView} notify={notify} originView={originView}
-          onCreateLog={onCreateLog}
+          onCreateLog={onCreateLog} onUpdateLog={onUpdateLog} editLog={editLog}
         />
       )}
       </div>
