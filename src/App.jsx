@@ -2910,6 +2910,10 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
 
   const students = roster && roster !== "none" ? (roster.students || []) : [];
   const isCurrentWeek = monday === mondayOf(getTodayStr());
+  const readOnly = !isCurrentWeek; // semanas passadas: só histórico
+  const viewedMonth = parseInt(ym.slice(5, 7), 10) || (new Date().getMonth() + 1);
+  const paidColView = 18 + viewedMonth; // pagamento congelado ao mês da semana vista
+  const sheetPaidV = (st) => !!st && st.lastPaidCol > 0 && st.lastPaidCol >= paidColView;
 
   const markOf = (key, date) => att[date]?.marks?.[key] || "";
   const weekMarks = (key) => days.map((d) => markOf(key, d));
@@ -2929,6 +2933,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   };
 
   const openObs = (st) => {
+    if (readOnly) return;
     const key = studentKey(st.nome);
     let date = days[Math.min(4, Math.max(0, new Date().getDay() - 1))];
     for (let i = days.length - 1; i >= 0; i--) if (markOf(key, days[i]).startsWith("A")) { date = days[i]; break; }
@@ -2945,9 +2950,10 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
     notify("Motivo guardado.");
   };
 
-  // Pago = override manual (se existir) senão o que vem da folha (último mês pago)
-  const isPaidOf = (st) => { const key = studentKey(st.nome); return (key in paid) ? paid[key] : sheetPaid(st); };
+  // Pago = override manual (se existir) senão o que vem da folha (mês da semana vista)
+  const isPaidOf = (st) => { const key = studentKey(st.nome); return (key in paid) ? paid[key] : sheetPaidV(st); };
   const togglePaid = async (st) => {
+    if (readOnly) return; // histórico congelado
     const key = studentKey(st.nome);
     const next = { ...paid, [key]: !isPaidOf(st) };
     setPaid(next);
@@ -2963,7 +2969,9 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
       const n = await onSyncClass(cls);
       const d = await getDoc(doc(db, "rosters", cls.id));
       setRoster(d.exists() ? d.data() : "none");
-      notify(`Lista atualizada: ${n} alunos.`);
+      // recarregar também o pagamento (o estado vem do último mês pago na folha)
+      try { const p = await getDoc(doc(db, "payments", `${cls.id}__${ym}`)); setPaid(p.exists() ? (p.data().paid || {}) : {}); } catch {}
+      notify(`Lista e pagamentos atualizados: ${n} alunos.`);
     } catch (e) { notify(e.message || "Erro ao atualizar."); }
     setSyncingOne(false);
   };
@@ -3022,10 +3030,10 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
             <span className={`truncate max-w-[150px] ${isParado ? "line-through text-slate-400" : ""}`}>{st.nome}</span>
             {isPending && <span className="text-[8px] font-black uppercase bg-violet-500 text-white px-1.5 py-0.5 rounded-full">pendente</span>}
             {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full" title="3 faltas seguidas — contactar o aluno">contactar o aluno</span>}
-            <button onClick={() => openNotes(st)} title="Notas do aluno" className={`p-1 rounded-md ${note ? "text-amber-600" : "text-slate-300 hover:text-slate-500"}`}><Info size={14} /></button>
-            {variant === "active" && <button onClick={() => openStop(st)} title="Parar aluno" className="p-1 rounded-md text-slate-300 hover:text-red-500"><UserX size={14} /></button>}
-            {isPending && <button onClick={() => removePending(st)} title="Remover" className="p-1 text-slate-300 hover:text-red-500"><Trash2 size={13} /></button>}
-            {isParado && canManage && <button onClick={() => reactivate(st)} className="text-[8px] font-black uppercase bg-emerald-500 text-white px-2 py-0.5 rounded-full active:scale-95">voltar a ativo</button>}
+            {!readOnly && <button onClick={() => openNotes(st)} title="Notas do aluno" className={`p-1 rounded-md ${note ? "text-amber-600" : "text-slate-300 hover:text-slate-500"}`}><Info size={14} /></button>}
+            {!readOnly && variant === "active" && <button onClick={() => openStop(st)} title="Parar aluno" className="p-1 rounded-md text-slate-300 hover:text-red-500"><UserX size={14} /></button>}
+            {!readOnly && isPending && <button onClick={() => removePending(st)} title="Remover" className="p-1 text-slate-300 hover:text-red-500"><Trash2 size={13} /></button>}
+            {!readOnly && isParado && canManage && <button onClick={() => reactivate(st)} className="text-[8px] font-black uppercase bg-emerald-500 text-white px-2 py-0.5 rounded-full active:scale-95">voltar a ativo</button>}
           </div>
           {note && <p className="text-[10px] font-bold text-amber-600 mt-1 truncate max-w-[210px]">📌 {note}</p>}
           {isParado && st.reason && <p className="text-[10px] font-bold text-slate-400 mt-1 truncate max-w-[210px]">motivo: {st.reason}</p>}
@@ -3035,10 +3043,10 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
           if (holiOf(d)) return <td key={d} className="p-1.5 text-center"><div className="w-11 h-10 rounded-xl border-2 border-dashed border-rose-200 bg-rose-50 flex items-center justify-center text-sm">🏖️</div></td>;
           if (isParado) return <td key={d} className="p-1.5 text-center"><div className="w-11 h-10 rounded-xl border-2 border-slate-100 bg-slate-50 flex items-center justify-center text-slate-300 font-black">{v ? v.charAt(0) : "·"}</div></td>;
           const cellCls = isPending ? (v ? "bg-violet-100 text-violet-700 border-violet-300" : "bg-white text-slate-300 border-slate-200") : (v ? PAY_CLS[status] : "bg-white text-slate-300 border-slate-200");
-          return <td key={d} className="p-1.5 text-center"><button onClick={() => toggle(st, d)} className={`w-11 h-10 rounded-xl font-black border-2 active:scale-90 transition-all ${cellCls}`}>{v ? v.charAt(0) : "·"}</button></td>;
+          return <td key={d} className="p-1.5 text-center"><button onClick={readOnly ? undefined : () => toggle(st, d)} className={`w-11 h-10 rounded-xl font-black border-2 transition-all ${readOnly ? "cursor-default" : "active:scale-90"} ${cellCls}`}>{v ? v.charAt(0) : "·"}</button></td>;
         })}
-        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={() => togglePaid(st)} title={status === "pago" ? "Pago" : status} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${paidNow ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-200 text-slate-300"}`}>💳</button>}</td>
-        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={() => openObs(st)} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${weekObs(key) ? "bg-indigo-100 border-indigo-300" : "bg-white border-slate-200 text-slate-300"}`}>📝</button>}</td>
+        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={readOnly ? undefined : () => togglePaid(st)} title={status === "pago" ? "Pago" : status} className={`w-11 h-10 rounded-xl border-2 ${readOnly ? "cursor-default" : "active:scale-90"} ${paidNow ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-200 text-slate-300"}`}>💳</button>}</td>
+        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={readOnly ? undefined : () => openObs(st)} className={`w-11 h-10 rounded-xl border-2 ${readOnly ? "cursor-default" : "active:scale-90"} ${weekObs(key) ? "bg-indigo-100 border-indigo-300" : "bg-white border-slate-200 text-slate-300"}`}>📝</button>}</td>
       </tr>
     );
   };
@@ -3122,7 +3130,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
         )
       )}
 
-      {roster && roster !== "none" && !loading && (
+      {roster && roster !== "none" && !loading && !readOnly && (
         <div className="mt-3">
           {addingOpen ? (
             <div className="bg-white border rounded-2xl shadow-sm p-3">
