@@ -358,8 +358,29 @@ const Watermark = () => (
   </div>
 );
 
+// Avisos in-app (aluno parado/reativado) para Direção e Recepção.
+const NotificationsBanner = ({ notifications = [], onDismiss, schoolFilter }) => {
+  const list = notifications
+    .filter((n) => !schoolFilter || schoolFilter === "all" || !n.school || n.school === schoolFilter)
+    .sort((a, b) => (b.ts?.seconds || 0) - (a.ts?.seconds || 0)).slice(0, 20);
+  if (!list.length) return null;
+  return (
+    <div className="bg-white rounded-2xl border shadow-sm p-4 mb-4">
+      <div className="flex items-center gap-2 mb-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><Bell size={14} /> Avisos ({list.length})</div>
+      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+        {list.map((n) => (
+          <div key={n.id} className="flex items-center justify-between gap-2 text-[12px] font-bold text-slate-600 bg-slate-50 rounded-xl px-3 py-2">
+            <span className="min-w-0">{n.message}</span>
+            <button onClick={() => onDismiss && onDismiss(n.id)} className="text-slate-300 hover:text-red-500 shrink-0" title="Marcar lida"><X size={14} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // Vista da recepção: todas as turmas, com seletor de escola, só leitura.
-const ReceptionView = ({ classes, teachers, logs, lessonPlans, attendance = [], setView, setSelectedClass, setOriginView }) => {
+const ReceptionView = ({ classes, teachers, logs, lessonPlans, attendance = [], notifications = [], onDismissNotification, setView, setSelectedClass, setOriginView }) => {
   const [school, setSchool] = useState("all");
   const [q, setQ] = useState("");
   const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "—";
@@ -394,6 +415,9 @@ const ReceptionView = ({ classes, teachers, logs, lessonPlans, attendance = [], 
         <input placeholder="Procurar turma ou professor…" className="w-full p-3.5 pl-12 bg-white border rounded-2xl font-bold text-sm"
           value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+
+      <NotificationsBanner notifications={notifications} onDismiss={onDismissNotification} schoolFilter={school} />
+
 
       <div className="bg-white rounded-[28px] border divide-y shadow-sm">
         {!list.length && <div className="p-6 text-sm text-slate-500 font-bold text-center">Nenhuma turma{school !== "all" ? ` em ${school}` : ""}.</div>}
@@ -886,6 +910,7 @@ const AdminDashboard = ({
   examReqs = [], recoveryReqs = [], physExams = [], tkExercises = [],
   onDeleteTunerRequest, onDeleteAssistantRequest,
   attendance = [], rosters = [], session,
+  notifications = [], onDismissNotification,
   tab, setTab,
 }) => {
   // Acesso restrito por escola: super-admin (todas as 3 ou nenhuma definida) faz tudo;
@@ -1008,6 +1033,8 @@ const AdminDashboard = ({
       </header>
 
       <main className="px-6 space-y-6">
+
+        <NotificationsBanner notifications={notifications} onDismiss={onDismissNotification} schoolFilter={viewSchool} />
 
         {/* ── ANÁLISES (registos do mês) ── */}
         {tab === "analises" && (() => {
@@ -2838,15 +2865,33 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   const [loading, setLoading] = useState(true);
   const [obsCtx, setObsCtx] = useState(null);
   const [obsText, setObsText] = useState("");
+  const [meta, setMeta] = useState({ notes: {}, stopped: {}, added: [], reactivated: {} });
+  const [notesCtx, setNotesCtx] = useState(null);
+  const [notesText, setNotesText] = useState("");
+  const [stopCtx, setStopCtx] = useState(null);
+  const [stopText, setStopText] = useState("");
+  const [addName, setAddName] = useState("");
+  const [addingOpen, setAddingOpen] = useState(false);
+  const canManage = getRoles(session).includes("admin") || getRoles(session).includes("recepcionista");
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try { const d = await getDoc(doc(db, "rosters", cls.id)); if (alive) setRoster(d.exists() ? d.data() : "none"); }
       catch { if (alive) setRoster("none"); }
+      try { const m = await getDoc(doc(db, "studentMeta", cls.id)); if (alive && m.exists()) setMeta({ notes: {}, stopped: {}, added: [], reactivated: {}, ...m.data() }); }
+      catch {}
     })();
     return () => { alive = false; };
   }, [cls.id]);
+
+  const saveMeta = async (next) => {
+    setMeta(next);
+    try { await setDoc(doc(db, "studentMeta", cls.id), next); } catch { notify("Falha ao guardar."); }
+  };
+  const notifyDir = async (msg) => {
+    try { await addDoc(collection(db, "notifications"), { message: msg, classId: cls.id, className: cls.name, school: cls.school || "", by: session?.accountId || "", read: false, ts: serverTimestamp() }); } catch {}
+  };
 
   useEffect(() => {
     let alive = true; setLoading(true);
@@ -2864,6 +2909,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   }, [cls.id, monday]);
 
   const students = roster && roster !== "none" ? (roster.students || []) : [];
+  const isCurrentWeek = monday === mondayOf(getTodayStr());
 
   const markOf = (key, date) => att[date]?.marks?.[key] || "";
   const weekMarks = (key) => days.map((d) => markOf(key, d));
@@ -2871,11 +2917,13 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
 
   const toggle = async (st, date) => {
     if (holiOf(date)) return; // dia não letivo
+    if (!isCurrentWeek) { notify("Semana anterior — só histórico, não editável."); return; }
     const key = studentKey(st.nome);
     const cur = markOf(key, date);
     const val = (!cur || cur.startsWith("A")) ? "P" : "A";
     const dayDoc = { ...(att[date] || {}), marks: { ...(att[date]?.marks || {}), [key]: val }, obs: att[date]?.obs || {} };
     setAtt((p) => ({ ...p, [date]: dayDoc }));
+    if (val === "P" && !isPaidOf(st)) notify(`${st.nome}: não pagou ${fmtMonthPt(ym)}. Lembrar do pagamento.`);
     try { await setDoc(doc(db, "attendance", `${cls.id}__${date}`), { classId: cls.id, date, school: cls.school || "", marks: dayDoc.marks, by: session?.accountId || "", ts: serverTimestamp() }, { merge: true }); }
     catch { notify("Falha ao gravar presença."); }
   };
@@ -2920,6 +2968,81 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
     setSyncingOne(false);
   };
 
+  // ── Listas: ativos · pendentes (adicionados) · parados ──
+  const stoppedMap = meta.stopped || {}, reactMap = meta.reactivated || {}, notesMap = meta.notes || {};
+  const rosterParados = (roster && roster !== "none" ? (roster.parados || []) : []).map((n) => (typeof n === "string" ? { nome: n } : n));
+  const rosterKeys = new Set(students.map((s) => studentKey(s.nome)));
+  const pendingStudents = (meta.added || []).filter((a) => !rosterKeys.has(studentKey(a.nome)));
+  const activeStudents = [
+    ...students.filter((s) => !stoppedMap[studentKey(s.nome)]),
+    ...rosterParados.filter((s) => reactMap[studentKey(s.nome)]),
+  ];
+  const paradosStudents = [
+    ...students.filter((s) => stoppedMap[studentKey(s.nome)]).map((s) => ({ ...s, reason: stoppedMap[studentKey(s.nome)]?.reason, fromApp: true })),
+    ...rosterParados.filter((s) => !reactMap[studentKey(s.nome)]).map((s) => ({ ...s, fromSheet: true })),
+  ];
+
+  const openNotes = (st) => { const k = studentKey(st.nome); setNotesText(notesMap[k] || ""); setNotesCtx({ key: k, name: st.nome }); };
+  const saveNotes = async () => {
+    const k = notesCtx.key, next = { ...meta, notes: { ...notesMap } };
+    if (notesText.trim()) next.notes[k] = notesText.trim(); else delete next.notes[k];
+    setNotesCtx(null); await saveMeta(next); notify("Nota guardada.");
+  };
+  const openStop = (st) => { setStopText(""); setStopCtx({ key: studentKey(st.nome), name: st.nome }); };
+  const confirmStop = async () => {
+    const t = stopText.trim(); if (!t) { notify("Escreva o motivo da paragem."); return; }
+    const k = stopCtx.key, next = { ...meta, stopped: { ...stoppedMap, [k]: { reason: t, name: stopCtx.name, at: getTodayStr() } } };
+    const nm = stopCtx.name; setStopCtx(null); await saveMeta(next);
+    await notifyDir(`${nm} → PARADOS em ${cls.name}. Motivo: ${t}`); notify("Aluno parado.");
+  };
+  const removePending = async (st) => { const k = studentKey(st.nome); await saveMeta({ ...meta, added: (meta.added || []).filter((a) => studentKey(a.nome) !== k) }); };
+  const addStudent = async () => {
+    const nm = addName.trim(); if (!nm) return; const k = studentKey(nm);
+    if ((meta.added || []).some((a) => studentKey(a.nome) === k) || rosterKeys.has(k)) { notify("Esse aluno já está na lista."); return; }
+    setAddName(""); setAddingOpen(false); await saveMeta({ ...meta, added: [...(meta.added || []), { nome: nm, at: getTodayStr(), by: session?.accountId || "" }] });
+    notify("Aluno adicionado (pendente).");
+  };
+  const reactivate = async (st) => {
+    const k = studentKey(st.nome); let next;
+    if (st.fromApp) { next = { ...meta, stopped: { ...stoppedMap } }; delete next.stopped[k]; }
+    else { next = { ...meta, reactivated: { ...reactMap, [k]: true } }; }
+    await saveMeta(next); await notifyDir(`${st.nome} voltou a ATIVO em ${cls.name}.`); notify("Aluno reativado.");
+  };
+
+  const studentRow = (st, variant) => {
+    const key = studentKey(st.nome);
+    const note = notesMap[key];
+    const paidNow = isPaidOf(st), status = paymentStatus(paidNow);
+    const isPending = variant === "pending", isParado = variant === "parado";
+    const warn = !isParado && has3Absences(days.filter((d) => !holiOf(d)).map((d) => markOf(key, d))) && !weekObs(key);
+    return (
+      <tr key={variant + "_" + key} className={`border-t ${isParado ? "bg-slate-50/50" : ""}`}>
+        <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[180px]">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className={`truncate max-w-[150px] ${isParado ? "line-through text-slate-400" : ""}`}>{st.nome}</span>
+            {isPending && <span className="text-[8px] font-black uppercase bg-violet-500 text-white px-1.5 py-0.5 rounded-full">pendente</span>}
+            {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full" title="3 faltas seguidas — contactar o aluno">contactar o aluno</span>}
+            <button onClick={() => openNotes(st)} title="Notas do aluno" className={`p-1 rounded-md ${note ? "text-amber-600" : "text-slate-300 hover:text-slate-500"}`}><Info size={14} /></button>
+            {variant === "active" && <button onClick={() => openStop(st)} title="Parar aluno" className="p-1 rounded-md text-slate-300 hover:text-red-500"><UserX size={14} /></button>}
+            {isPending && <button onClick={() => removePending(st)} title="Remover" className="p-1 text-slate-300 hover:text-red-500"><Trash2 size={13} /></button>}
+            {isParado && canManage && <button onClick={() => reactivate(st)} className="text-[8px] font-black uppercase bg-emerald-500 text-white px-2 py-0.5 rounded-full active:scale-95">voltar a ativo</button>}
+          </div>
+          {note && <p className="text-[10px] font-bold text-amber-600 mt-1 truncate max-w-[210px]">📌 {note}</p>}
+          {isParado && st.reason && <p className="text-[10px] font-bold text-slate-400 mt-1 truncate max-w-[210px]">motivo: {st.reason}</p>}
+        </td>
+        {days.map((d) => {
+          const v = markOf(key, d);
+          if (holiOf(d)) return <td key={d} className="p-1.5 text-center"><div className="w-11 h-10 rounded-xl border-2 border-dashed border-rose-200 bg-rose-50 flex items-center justify-center text-sm">🏖️</div></td>;
+          if (isParado) return <td key={d} className="p-1.5 text-center"><div className="w-11 h-10 rounded-xl border-2 border-slate-100 bg-slate-50 flex items-center justify-center text-slate-300 font-black">{v ? v.charAt(0) : "·"}</div></td>;
+          const cellCls = isPending ? (v ? "bg-violet-100 text-violet-700 border-violet-300" : "bg-white text-slate-300 border-slate-200") : (v ? PAY_CLS[status] : "bg-white text-slate-300 border-slate-200");
+          return <td key={d} className="p-1.5 text-center"><button onClick={() => toggle(st, d)} className={`w-11 h-10 rounded-xl font-black border-2 active:scale-90 transition-all ${cellCls}`}>{v ? v.charAt(0) : "·"}</button></td>;
+        })}
+        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={() => togglePaid(st)} title={status === "pago" ? "Pago" : status} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${paidNow ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-200 text-slate-300"}`}>💳</button>}</td>
+        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={() => openObs(st)} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${weekObs(key) ? "bg-indigo-100 border-indigo-300" : "bg-white border-slate-200 text-slate-300"}`}>📝</button>}</td>
+      </tr>
+    );
+  };
+
   return (
     <div className="max-w-5xl mx-auto p-5 pb-24">
       <div className="flex items-center gap-3 mb-4">
@@ -2944,6 +3067,11 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
         </div>
         <button onClick={() => shiftWeek(1)} className="px-3 py-2 bg-slate-100 rounded-xl font-black text-slate-600 active:scale-90">›</button>
       </div>
+      {!isCurrentWeek && (
+        <div className="bg-slate-100 border border-slate-200 rounded-2xl px-4 py-2.5 mb-4 text-[11px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
+          <History size={14} /> Semana anterior — só histórico (não editável)
+        </div>
+      )}
 
       {roster === "none" && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
@@ -2982,53 +3110,35 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
                 </tr>
               </thead>
               <tbody>
-                {!students.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Nenhum aluno nesta turma.</td></tr>}
-                {students.map((st) => {
-                  const key = studentKey(st.nome);
-                  const paidNow = isPaidOf(st);
-                  const status = paymentStatus(paidNow);
-                  const warn = has3Absences(days.filter((d) => !holiOf(d)).map((d) => markOf(key, d))) && !weekObs(key);
-                  return (
-                    <tr key={key} className="border-t">
-                      <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[150px]">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate max-w-[160px]">{st.nome}</span>
-                          {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full whitespace-nowrap" title="3 faltas seguidas — contactar o aluno">contactar o aluno</span>}
-                        </div>
-                      </td>
-                      {days.map((d) => {
-                        const v = markOf(key, d);
-                        if (holiOf(d)) return (
-                          <td key={d} className="p-1.5 text-center">
-                            <div className="w-11 h-10 rounded-xl border-2 border-dashed border-rose-200 bg-rose-50 flex items-center justify-center text-sm" title={holidayName(d, holidays) || "Feriado"}>🏖️</div>
-                          </td>
-                        );
-                        return (
-                          <td key={d} className="p-1.5 text-center">
-                            <button onClick={() => toggle(st, d)}
-                              className={`w-11 h-10 rounded-xl font-black border-2 active:scale-90 transition-all ${v ? PAY_CLS[status] : "bg-white text-slate-300 border-slate-200"}`}>
-                              {v ? v.charAt(0) : "·"}
-                            </button>
-                          </td>
-                        );
-                      })}
-                      <td className="p-1.5 text-center">
-                        <button onClick={() => togglePaid(st)} title={status === "pago" ? "Pago" : status} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${paidNow ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-200 text-slate-300"}`}>💳</button>
-                      </td>
-                      <td className="p-1.5 text-center">
-                        <button onClick={() => openObs(st)} className={`w-11 h-10 rounded-xl border-2 active:scale-90 ${weekObs(key) ? "bg-indigo-100 border-indigo-300" : "bg-white border-slate-200 text-slate-300"}`}>📝</button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {!activeStudents.length && !pendingStudents.length && !paradosStudents.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Nenhum aluno nesta turma.</td></tr>}
+                {activeStudents.map((st) => studentRow(st, "active"))}
+                {pendingStudents.length > 0 && <tr><td colSpan={8} className="bg-violet-50 text-violet-600 text-[10px] font-black uppercase tracking-widest px-3 py-2">Adicionados (pendentes até entrarem na folha)</td></tr>}
+                {pendingStudents.map((st) => studentRow(st, "pending"))}
+                {paradosStudents.length > 0 && <tr><td colSpan={8} className="bg-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-widest px-3 py-2">Alunos parados</td></tr>}
+                {paradosStudents.map((st) => studentRow(st, "parado"))}
               </tbody>
             </table>
           </div>
         )
       )}
 
+      {roster && roster !== "none" && !loading && (
+        <div className="mt-3">
+          {addingOpen ? (
+            <div className="bg-white border rounded-2xl shadow-sm p-3 flex gap-2 items-center">
+              <input autoFocus value={addName} onChange={(e) => setAddName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addStudent(); }} placeholder="Nome do aluno novo" className="flex-1 p-2.5 bg-slate-50 border rounded-xl font-bold text-sm" />
+              <button onClick={addStudent} className="px-3 py-2.5 bg-indigo-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95">Adicionar</button>
+              <button onClick={() => { setAddingOpen(false); setAddName(""); }} className="px-3 py-2.5 bg-slate-100 text-slate-500 rounded-xl font-black text-[10px] uppercase tracking-widest">✕</button>
+            </div>
+          ) : (
+            <button onClick={() => setAddingOpen(true)} className="w-full p-3 bg-white border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95"><UserPlus size={16} /> Adicionar aluno</button>
+          )}
+          <p className="text-[10px] font-bold text-slate-400 mt-1.5 px-1">O aluno adicionado fica <span className="text-violet-500 font-black">pendente</span> (marcações a roxo) até aparecer na folha oficial.</p>
+        </div>
+      )}
+
       {roster && roster !== "none" && !loading && (() => {
-        const faltas = students.map((st) => {
+        const faltas = [...activeStudents, ...pendingStudents].map((st) => {
           const key = studentKey(st.nome);
           const dias = days.map((d, i) => (!holiOf(d) && markOf(key, d).startsWith("A")) ? WEEKDAYS_SHORT[i] : null).filter(Boolean);
           const motivo = days.map((d) => att[d]?.obs?.[key]).find(Boolean) || "";
@@ -3068,6 +3178,36 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
             <div className="flex gap-2">
               <button onClick={() => setObsCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Cancelar</button>
               <button onClick={() => saveObs()} className="flex-1 p-3 bg-slate-900 text-white rounded-xl font-black text-sm">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {notesCtx && (
+        <div className="fixed inset-0 bg-black/30 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setNotesCtx(null)}>
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
+            <p className="font-black text-slate-800">Nota — <span className="text-amber-600">{notesCtx.name}</span></p>
+            <p className="text-[11px] font-bold text-slate-400">Fica visível para todos (professor, recepção e direção).</p>
+            <textarea rows={3} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm resize-y" placeholder="Escreva uma nota sobre o aluno…" maxLength={300}
+              value={notesText} onChange={(e) => setNotesText(e.target.value)} />
+            <div className="flex gap-2">
+              <button onClick={() => setNotesCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Cancelar</button>
+              <button onClick={saveNotes} className="flex-1 p-3 bg-slate-900 text-white rounded-xl font-black text-sm">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stopCtx && (
+        <div className="fixed inset-0 bg-black/30 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setStopCtx(null)}>
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
+            <p className="font-black text-slate-800">Parar aluno — <span className="text-red-600">{stopCtx.name}</span></p>
+            <p className="text-[11px] font-bold text-slate-400">O motivo é <span className="font-black text-red-500">obrigatório</span>. O aluno vai para os "parados" e a Direção/Recepção é avisada.</p>
+            <textarea rows={2} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm resize-y" placeholder="Motivo da paragem (obrigatório)…" maxLength={200}
+              value={stopText} onChange={(e) => setStopText(e.target.value)} />
+            <div className="flex gap-2">
+              <button onClick={() => setStopCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Cancelar</button>
+              <button onClick={confirmStop} className="flex-1 p-3 bg-red-600 text-white rounded-xl font-black text-sm">Parar aluno</button>
             </div>
           </div>
         </div>
@@ -3164,6 +3304,7 @@ export default function App() {
   const [tkExercises,   setTkExercises]   = useState([]);
   const [attendance,    setAttendance]    = useState([]);
   const [rosters,       setRosters]       = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [adminPin,      setAdminPinState] = useState("200503");
   const [tabletMode,    setTabletModeState] = useState(false);
   const [rosterUrls,    setRosterUrlsState] = useState({});
@@ -3331,12 +3472,13 @@ export default function App() {
       return;
     }
     let resolved = 0;
-    const check = () => { if (++resolved >= 12) setDataLoading(false); };
+    const check = () => { if (++resolved >= 13) setDataLoading(false); };
     const timeout = setTimeout(() => setDataLoading(false), 8000);
 
     const unsubs = [
       onSnapshot(query(collection(db, "attendance"), where("date", ">=", mondayOf(getTodayStr()))), (s) => { setAttendance(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "rosters"), (s) => { setRosters(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
+      onSnapshot(collection(db, "notifications"), (s) => { setNotifications(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "teachers"),    (s) => { setTeachers(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "classes"),     (s) => { setClasses(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
@@ -3459,6 +3601,10 @@ export default function App() {
 
   const onCreateLog = useCallback(async (log) => {
     await addDoc(collection(db, "logs"), log);
+  }, []);
+
+  const dismissNotification = useCallback(async (id) => {
+    try { await deleteDoc(doc(db, "notifications", id)); } catch {}
   }, []);
 
   // ── Substitutions CRUD → Firestore ──────────────────────────────────────────
@@ -4008,6 +4154,7 @@ export default function App() {
       {view === "reception" && getRoles(session).includes("recepcionista") && (
         <ReceptionView
           classes={classes} teachers={teachers} logs={logs} lessonPlans={lessonPlans} attendance={attendance}
+          notifications={notifications} onDismissNotification={dismissNotification}
           setView={setView} setSelectedClass={setSelectedClass} setOriginView={setOriginView}
         />
       )}
@@ -4026,6 +4173,7 @@ export default function App() {
           examReqs={examReqs} recoveryReqs={recoveryReqs} physExams={physExams} tkExercises={tkExercises}
           onDeleteTunerRequest={onDeleteTunerRequest} onDeleteAssistantRequest={onDeleteAssistantRequest}
           attendance={attendance} rosters={rosters} session={session}
+          notifications={notifications} onDismissNotification={dismissNotification}
           tab={adminTab} setTab={setAdminTab}
         />
       )}
