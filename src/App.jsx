@@ -2362,9 +2362,9 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><UserX size={14} /> Professor ausente</div>
               <div><span className={labelCls}>Você (ausente)</span>
                 <select className={inputCls} value={form.absentTeacherId} onChange={(e) => set("absentTeacherId", e.target.value)}>
-                  {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}{t.id === meId ? " (a minha conta)" : ""}</option>)}
+                  {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}{t.id === meId ? " (atual)" : ""}</option>)}
                 </select>
-                <p className="text-[10px] font-bold text-slate-400 mt-1">Vem da tua conta; muda só se pedires por outro professor.</p>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Vem do professor atual; muda se o pedido for por outro.</p>
               </div>
               <div>
                 <span className={labelCls}>Turma</span>
