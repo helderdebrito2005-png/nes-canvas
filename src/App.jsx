@@ -2225,7 +2225,7 @@ const AdminDashboard = ({
 const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlans = [], logs = [], onSubmitSub, onConfirmSub, notify, onBack }) => {
   const [tab, setTab] = useState("request");
   const [form, setForm] = useState({
-    classId: "", date: getTodayStr(), time: "", room: "", book: "", page: "",
+    classId: "", absentTeacherId: actingTeacher?.id || "", date: getTodayStr(), time: "", room: "", book: "", page: "",
     lessontype: "", lessonnotes: "", subTeacherId: "", reason: "",
   });
   const [formError, setFormError] = useState("");
@@ -2243,7 +2243,7 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
     if (!cls) { setForm((p) => ({ ...p, classId: "" })); return; }
     const prog = calculateProgress(cls.id, logs, lessonPlans, cls);
     const planName = lessonPlans.find((p) => p.id === cls.lessonPlanId)?.name || "";
-    setForm((p) => ({ ...p, classId: cid, room: cls.room || "", book: planName, page: prog.lastEndPage ? String(prog.lastEndPage) : "" }));
+    setForm((p) => ({ ...p, classId: cid, time: cls.time || p.time, room: cls.room || "", book: planName, page: prog.lastEndPage ? String(prog.lastEndPage) : "" }));
   };
 
   const myPending = subs.filter((r) => r.subTeacherId === meId && !r.confirmed);
@@ -2252,24 +2252,25 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
 
   const submit = async () => {
     setFormError("");
-    const { date, time, room, book, page, lessontype, lessonnotes, subTeacherId, reason } = form;
-    if (!date || !time || !room || !book || !page || !lessontype || !lessonnotes || !subTeacherId || !reason) {
+    const { date, time, room, book, page, lessontype, lessonnotes, subTeacherId, reason, absentTeacherId } = form;
+    if (!absentTeacherId || !date || !time || !room || !book || !page || !lessontype || !lessonnotes || !subTeacherId || !reason) {
       setFormError("Preencha todos os campos obrigatórios."); return;
     }
     if (!twoHoursOk(date, time)) { setFormError("Tem de ser pelo menos 2 horas antes da hora da aula."); return; }
-    const dup = subs.find((r) => r.absentTeacherId === meId && r.date === date && r.time === time);
-    if (dup) { setFormError(`Já existe um pedido seu para ${fmtDatePt(date)} às ${time} (substituto: ${dup.subName}).`); return; }
+    const absName = teachers.find((t) => t.id === absentTeacherId)?.name || meName;
+    const dup = subs.find((r) => r.absentTeacherId === absentTeacherId && r.date === date && r.time === time);
+    if (dup) { setFormError(`Já existe um pedido para ${absName} em ${fmtDatePt(date)} às ${time} (substituto: ${dup.subName}).`); return; }
     const subName = teachers.find((t) => t.id === subTeacherId)?.name || "";
     setSubmitting(true);
     try {
       await onSubmitSub({
-        absentTeacherId: meId, absentName: meName,
+        absentTeacherId, absentName: absName,
         subTeacherId, subName,
         classId: form.classId || "", className: classes.find((c) => c.id === form.classId)?.name || "",
         date, time, room, book, page, lessontype, lessonnotes, reason,
         submittedByTeacherId: meId,
       });
-      setForm({ classId: "", date: getTodayStr(), time: "", room: "", book: "", page: "", lessontype: "", lessonnotes: "", subTeacherId: "", reason: "" });
+      setForm({ classId: "", absentTeacherId: actingTeacher?.id || "", date: getTodayStr(), time: "", room: "", book: "", page: "", lessontype: "", lessonnotes: "", subTeacherId: "", reason: "" });
       notify(`Pedido enviado. ${subName} foi avisado(a).`);
       setTab("board");
     } catch (e) {
@@ -2359,14 +2360,19 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
           <>
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><UserX size={14} /> Professor ausente</div>
-              <div><span className={labelCls}>Você (ausente)</span><input className={inputCls + " bg-slate-100"} value={meName} readOnly /></div>
+              <div><span className={labelCls}>Você (ausente)</span>
+                <select className={inputCls} value={form.absentTeacherId} onChange={(e) => set("absentTeacherId", e.target.value)}>
+                  {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}{t.id === meId ? " (a minha conta)" : ""}</option>)}
+                </select>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Vem da tua conta; muda só se pedires por outro professor.</p>
+              </div>
               <div>
                 <span className={labelCls}>Turma</span>
                 <select className={inputCls} value={form.classId} onChange={(e) => pickClass(e.target.value)}>
                   <option value="">Escolher a minha turma…</option>
                   {myClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <p className="text-[10px] font-bold text-indigo-500 mt-1">Escolhe a turma e a sala, o livro e a última página preenchem-se sozinhos.</p>
+                <p className="text-[10px] font-bold text-indigo-500 mt-1">Ao escolher a turma, a hora, a sala, o livro e a última página preenchem-se sozinhos.</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><span className={labelCls}>Data *</span><input type="date" className={inputCls} value={form.date} onChange={(e) => set("date", e.target.value)} /></div>
@@ -2376,6 +2382,9 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
                   </select>
                 </div>
               </div>
+              {form.date && form.time && !twoHoursOk(form.date, form.time) && (
+                <p className="text-[11px] font-black text-amber-600 flex items-center gap-1.5"><AlertTriangle size={13} /> Tem de ser pelo menos 2 horas antes da hora da aula.</p>
+              )}
               <div><span className={labelCls}>Sala *</span><input className={inputCls} placeholder="ex.: Sala 3" value={form.room} onChange={(e) => set("room", e.target.value)} /></div>
             </div>
 
@@ -2400,7 +2409,7 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
               <div><span className={labelCls}>Colega que aceitou cobrir *</span>
                 <select className={inputCls} value={form.subTeacherId} onChange={(e) => set("subTeacherId", e.target.value)}>
                   <option value="">Selecionar colega</option>
-                  {teachers.filter((t) => t.id !== meId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {teachers.filter((t) => t.id !== form.absentTeacherId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
               </div>
               <div><span className={labelCls}>Motivo da ausência *</span>
@@ -2916,6 +2925,9 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   const ym = monday.slice(0, 7);
   const [att, setAtt] = useState({});
   const [paid, setPaid] = useState({});
+  const [paidDates, setPaidDates] = useState({});
+  const [payDateCtx, setPayDateCtx] = useState(null);
+  const [payDate, setPayDate] = useState("");
   const [loading, setLoading] = useState(true);
   const [obsCtx, setObsCtx] = useState(null);
   const [obsText, setObsText] = useState("");
@@ -2955,9 +2967,9 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
         try { const s = await getDoc(doc(db, "attendance", `${cls.id}__${dt}`)); map[dt] = s.exists() ? s.data() : { marks: {}, obs: {} }; }
         catch { map[dt] = { marks: {}, obs: {} }; }
       }));
-      let paidMap = {};
-      try { const p = await getDoc(doc(db, "payments", `${cls.id}__${ym}`)); if (p.exists()) paidMap = p.data().paid || {}; } catch {}
-      if (alive) { setAtt(map); setPaid(paidMap); setLoading(false); }
+      let paidMap = {}, datesMap = {};
+      try { const p = await getDoc(doc(db, "payments", `${cls.id}__${ym}`)); if (p.exists()) { paidMap = p.data().paid || {}; datesMap = p.data().paidDates || {}; } } catch {}
+      if (alive) { setAtt(map); setPaid(paidMap); setPaidDates(datesMap); setLoading(false); }
     })();
     return () => { alive = false; };
   }, [cls.id, monday]);
@@ -3006,12 +3018,22 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
 
   // Pago = override manual (se existir) senão o que vem da folha (mês da semana vista)
   const isPaidOf = (st) => { const key = studentKey(st.nome); return (key in paid) ? paid[key] : sheetPaidV(st); };
+  const isManualPaid = (st) => paid[studentKey(st.nome)] === true; // marcado por pessoa → azul
   const togglePaid = async (st) => {
     if (readOnly) return; // histórico congelado
     const key = studentKey(st.nome);
-    const next = { ...paid, [key]: !isPaidOf(st) };
-    setPaid(next);
-    try { await setDoc(doc(db, "payments", `${cls.id}__${ym}`), { classId: cls.id, ym, paid: next }, { merge: true }); } catch {}
+    if (!isPaidOf(st)) { setPayDate(getTodayStr()); setPayDateCtx({ key, name: st.nome }); return; } // marcar → pedir data da fatura
+    const next = { ...paid, [key]: false };
+    const nextDates = { ...paidDates }; delete nextDates[key];
+    setPaid(next); setPaidDates(nextDates);
+    try { await setDoc(doc(db, "payments", `${cls.id}__${ym}`), { classId: cls.id, ym, paid: next, paidDates: nextDates }, { merge: true }); } catch {}
+  };
+  const confirmPayDate = async () => {
+    const { key } = payDateCtx; const d = payDate || getTodayStr();
+    const next = { ...paid, [key]: true }; const nextDates = { ...paidDates, [key]: d };
+    setPaid(next); setPaidDates(nextDates); setPayDateCtx(null);
+    try { await setDoc(doc(db, "payments", `${cls.id}__${ym}`), { classId: cls.id, ym, paid: next, paidDates: nextDates }, { merge: true }); } catch {}
+    notify("Pagamento marcado.");
   };
 
   const shiftWeek = (n) => { const d = new Date(monday + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n * 7); setWeekBase(d.toISOString().split("T")[0]); };
@@ -3024,7 +3046,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
       const d = await getDoc(doc(db, "rosters", cls.id));
       setRoster(d.exists() ? d.data() : "none");
       // recarregar também o pagamento (o estado vem do último mês pago na folha)
-      try { const p = await getDoc(doc(db, "payments", `${cls.id}__${ym}`)); setPaid(p.exists() ? (p.data().paid || {}) : {}); } catch {}
+      try { const p = await getDoc(doc(db, "payments", `${cls.id}__${ym}`)); setPaid(p.exists() ? (p.data().paid || {}) : {}); setPaidDates(p.exists() ? (p.data().paidDates || {}) : {}); } catch {}
       notify(`Lista e pagamentos atualizados: ${n} alunos.`);
     } catch (e) { notify(e.message || "Erro ao atualizar."); }
     setSyncingOne(false);
@@ -3071,17 +3093,20 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
     await saveMeta(next); await notifyDir(`${st.nome} voltou a ATIVO em ${cls.name}.`); notify("Aluno reativado.");
   };
 
-  const studentRow = (st, variant) => {
+  const studentRow = (st, variant, num) => {
     const key = studentKey(st.nome);
     const note = notesMap[key];
     const paidNow = isPaidOf(st), status = paymentStatus(paidNow);
+    const manual = isManualPaid(st); // pagamento marcado por pessoa → azul
+    const payDateStr = paidDates[key];
     const isPending = variant === "pending", isParado = variant === "parado";
     const warn = !isParado && has3Absences(days.filter((d) => !holiOf(d)).map((d) => markOf(key, d))) && !weekObs(key);
     return (
       <tr key={variant + "_" + key} className={`border-t ${isParado ? "bg-slate-50/50" : ""}`}>
         <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[180px]">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className={`truncate max-w-[150px] ${isParado ? "line-through text-slate-400" : ""}`}>{st.nome}</span>
+            {num != null && <span className="text-[11px] font-black text-slate-300 tabular-nums w-5 text-right">{num}.</span>}
+            <span className={`truncate max-w-[140px] ${isParado ? "line-through text-slate-400" : ""}`}>{st.nome}</span>
             {isPending && <span className="text-[8px] font-black uppercase bg-violet-500 text-white px-1.5 py-0.5 rounded-full">pendente</span>}
             {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full" title="3 faltas seguidas — contactar o aluno">contactar o aluno</span>}
             {!readOnly && <button onClick={() => openNotes(st)} title="Notas do aluno" className={`p-1 rounded-md ${note ? "text-amber-600" : "text-slate-300 hover:text-slate-500"}`}><Info size={14} /></button>}
@@ -3096,10 +3121,10 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
           const v = markOf(key, d);
           if (holiOf(d)) return <td key={d} className="p-1.5 text-center"><div className="w-11 h-10 rounded-xl border-2 border-dashed border-rose-200 bg-rose-50 flex items-center justify-center text-sm">🏖️</div></td>;
           if (isParado) return <td key={d} className="p-1.5 text-center"><div className="w-11 h-10 rounded-xl border-2 border-slate-100 bg-slate-50 flex items-center justify-center text-slate-300 font-black">{v ? v.charAt(0) : "·"}</div></td>;
-          const cellCls = isPending ? (v ? "bg-violet-100 text-violet-700 border-violet-300" : "bg-white text-slate-300 border-slate-200") : (v ? PAY_CLS[status] : "bg-white text-slate-300 border-slate-200");
+          const cellCls = isPending ? (v ? "bg-violet-100 text-violet-700 border-violet-300" : "bg-white text-slate-300 border-slate-200") : (v ? (manual ? "bg-blue-100 text-blue-700 border-blue-300" : PAY_CLS[status]) : "bg-white text-slate-300 border-slate-200");
           return <td key={d} className="p-1.5 text-center"><button onClick={readOnly ? undefined : () => toggle(st, d)} className={`w-11 h-10 rounded-xl font-black border-2 transition-all ${readOnly ? "cursor-default" : "active:scale-90"} ${cellCls}`}>{v ? v.charAt(0) : "·"}</button></td>;
         })}
-        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={readOnly ? undefined : () => togglePaid(st)} title={status === "pago" ? "Pago" : status} className={`w-11 h-10 rounded-xl border-2 ${readOnly ? "cursor-default" : "active:scale-90"} ${paidNow ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-200 text-slate-300"}`}>💳</button>}</td>
+        <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={readOnly ? undefined : () => togglePaid(st)} title={paidNow ? (manual ? "Pago (marcado)" : "Pago") + (payDateStr ? " · fatura " + fmtDatePt(payDateStr) : "") : status} className={`w-11 h-10 rounded-xl border-2 ${readOnly ? "cursor-default" : "active:scale-90"} ${paidNow ? (manual ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-green-100 border-green-300 text-green-700") : "bg-white border-slate-200 text-slate-300"}`}>💳</button>}</td>
         <td className="p-1.5 text-center">{isParado ? <span className="text-slate-300">—</span> : <button onClick={readOnly ? undefined : () => openObs(st)} className={`w-11 h-10 rounded-xl border-2 ${readOnly ? "cursor-default" : "active:scale-90"} ${weekObs(key) ? "bg-indigo-100 border-indigo-300" : "bg-white border-slate-200 text-slate-300"}`}>📝</button>}</td>
       </tr>
     );
@@ -3173,11 +3198,11 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
               </thead>
               <tbody>
                 {!activeStudents.length && !pendingStudents.length && !paradosStudents.length && <tr><td colSpan={8} className="p-6 text-center text-slate-400 font-bold">Nenhum aluno nesta turma.</td></tr>}
-                {activeStudents.map((st) => studentRow(st, "active"))}
+                {activeStudents.map((st, i) => studentRow(st, "active", i + 1))}
                 {pendingStudents.length > 0 && <tr><td colSpan={8} className="bg-violet-50 text-violet-600 text-[10px] font-black uppercase tracking-widest px-3 py-2">Adicionados (pendentes até entrarem na folha)</td></tr>}
-                {pendingStudents.map((st) => studentRow(st, "pending"))}
-                {paradosStudents.length > 0 && <tr><td colSpan={8} className="bg-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-widest px-3 py-2">Alunos parados</td></tr>}
-                {paradosStudents.map((st) => studentRow(st, "parado"))}
+                {pendingStudents.map((st, i) => studentRow(st, "pending", activeStudents.length + i + 1))}
+                {paradosStudents.length > 0 && <tr><td colSpan={8} className="bg-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-widest px-3 py-2">Alunos parados (contagem própria)</td></tr>}
+                {paradosStudents.map((st, i) => studentRow(st, "parado", i + 1))}
               </tbody>
             </table>
           </div>
@@ -3274,6 +3299,20 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
             <div className="flex gap-2">
               <button onClick={() => setStopCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Cancelar</button>
               <button onClick={confirmStop} className="flex-1 p-3 bg-red-600 text-white rounded-xl font-black text-sm">Parar aluno</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {payDateCtx && (
+        <div className="fixed inset-0 bg-black/30 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setPayDateCtx(null)}>
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
+            <p className="font-black text-slate-800">Pagamento — <span className="text-blue-600">{payDateCtx.name}</span></p>
+            <p className="text-[11px] font-bold text-slate-400">Data que consta na fatura / recibo.</p>
+            <input type="date" className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+            <div className="flex gap-2">
+              <button onClick={() => setPayDateCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Cancelar</button>
+              <button onClick={confirmPayDate} className="flex-1 p-3 bg-blue-600 text-white rounded-xl font-black text-sm">Marcar pago</button>
             </div>
           </div>
         </div>
