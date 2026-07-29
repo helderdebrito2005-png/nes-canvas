@@ -3673,9 +3673,11 @@ export default function App() {
       const landing = isTeaching ? "teacher_home" : roles.includes("recepcionista") ? "reception" : roles.includes("admin") ? "admin_home" : "teacher_home";
       setView(landing); setOriginView(landing); return;
     }
-    // If on teacher_home but actingTeacher not found (teacherId mismatch), go to choose_teacher
-    if (session && view === "teacher_home" && !actingTeacher && teachers.length > 0
-        && getRoles(session).some((r) => ["teacher", "tuner", "assistant"].includes(r))) {
+    // Só manda para o seletor se o teacherId da conta NÃO existir de todo na lista
+    // (verifica direto na lista, não no estado assíncrono actingTeacher — evita a race no login).
+    if (session && view === "teacher_home" && teachers.length > 0
+        && getRoles(session).some((r) => ["teacher", "tuner", "assistant"].includes(r))
+        && !teachers.find((x) => x.id === session.teacherId)) {
       setView("choose_teacher");
     }
   }, [authLoading, dataLoading, session, tabletMode, view, actingTeacher, teachers]);
