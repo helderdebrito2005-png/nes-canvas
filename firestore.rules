@@ -1,41 +1,17 @@
 rules_version = '2';
 
-// Regras que espelham o comportamento atual do app NES Canvas.
-// - settings/main: lido antes do login (o app trata-o como público).
-// - users: lido antes do login no fluxo de registo (procura por email).
-// - restantes coleções: apenas para utilizadores autenticados.
+// NES Canvas — regras simples e completas.
+// - Qualquer utilizador AUTENTICADO lê/escreve tudo (cobre todas as coleções,
+//   incluindo rosters, attendance, payments, studentMeta e notifications).
+// - settings e users têm leitura pública (necessária antes do login).
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Definições da app (adminPin, tabletMode). Leitura pública; escrita autenticada.
-    match /settings/{docId} {
-      allow read: if true;
-      allow write: if request.auth != null;
+    match /{document=**} {
+      allow read, write: if request.auth != null;
     }
 
-    // Perfis de contas. Leitura pública (necessária para o registo por email);
-    // escrita apenas autenticada.
-    match /users/{docId} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-
-    // Dados operacionais: só utilizadores autenticados.
-    match /teachers/{docId}      { allow read, write: if request.auth != null; }
-    match /classes/{docId}       { allow read, write: if request.auth != null; }
-    match /lessonPlans/{docId}   { allow read, write: if request.auth != null; }
-    match /logs/{docId}          { allow read, write: if request.auth != null; }
-    match /substitutions/{docId}     { allow read, write: if request.auth != null; }
-    match /examRequests/{docId}       { allow read, write: if request.auth != null; }
-    match /recoveryRequests/{docId}   { allow read, write: if request.auth != null; }
-    match /physExamRequests/{docId}   { allow read, write: if request.auth != null; }
-    match /tkExerciseRequests/{docId} { allow read, write: if request.auth != null; }
-
-    // Presenças: alunos sincronizados da folha + marcações + pagamentos.
-    match /rosters/{docId}    { allow read, write: if request.auth != null; }
-    match /attendance/{docId} { allow read, write: if request.auth != null; }
-    match /payments/{docId}   { allow read, write: if request.auth != null; }
-    match /studentMeta/{docId}  { allow read, write: if request.auth != null; }
-    match /notifications/{docId} { allow read, write: if request.auth != null; }
+    match /settings/{doc} { allow read: if true; }
+    match /users/{doc}    { allow read: if true; }
   }
 }
