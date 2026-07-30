@@ -6,7 +6,7 @@ import {
   Briefcase, ListChecks, Edit3, Search, ShieldCheck, Lock,
   KeyRound, Loader2, BookOpen, Map, UserCheck, Type, Bell,
   Activity, CheckSquare, Square, Mic2, Info, Clock, Tablet,
-  UserCog, Mail, Phone,
+  UserCog, Mail, Phone, MessageCircle, Cake,
   Repeat, Send, AlertTriangle, BarChart3, UserX,
   Archive, ArchiveRestore, X,
 } from "lucide-react";
@@ -158,7 +158,9 @@ function parseRoster(text) {
       const v = String(r[ci] || "").trim();
       if (v && v !== "--" && /\d/.test(v)) lastPaidCol = ci + 1;
     }
-    cur.students.push({ num: nm ? +nm[1] : 0, nome, id: String(r[0] || "").trim(), lastPaidCol });
+    cur.students.push({ num: nm ? +nm[1] : 0, nome, id: String(r[0] || "").trim(), lastPaidCol,
+      telefone: String(r[4] || "").trim(), whatsapp: String(r[5] || "").trim(),
+      idade: String(r[6] || "").trim(), dataNasc: String(r[7] || "").trim() });
   }
   return out;
 }
@@ -2936,6 +2938,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   const [notesText, setNotesText] = useState("");
   const [stopCtx, setStopCtx] = useState(null);
   const [stopText, setStopText] = useState("");
+  const [infoCtx, setInfoCtx] = useState(null);
   const [addName, setAddName] = useState("");
   const [addingOpen, setAddingOpen] = useState(false);
   const canManage = getRoles(session).includes("admin") || getRoles(session).includes("recepcionista");
@@ -3106,7 +3109,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
         <td className="p-3 text-left font-bold text-slate-800 sticky left-0 bg-white z-10 min-w-[180px]">
           <div className="flex items-center gap-1.5 flex-wrap">
             {num != null && <span className="text-[11px] font-black text-slate-300 tabular-nums w-5 text-right">{num}.</span>}
-            <span className={`truncate max-w-[140px] ${isParado ? "line-through text-slate-400" : ""}`}>{st.nome}</span>
+            <button onClick={() => setInfoCtx(st)} title="Ver contacto e idade" className={`truncate max-w-[140px] text-left hover:text-indigo-600 hover:underline decoration-dotted underline-offset-2 ${isParado ? "line-through text-slate-400" : ""}`}>{st.nome}</button>
             {isPending && <span className="text-[8px] font-black uppercase bg-violet-500 text-white px-1.5 py-0.5 rounded-full">pendente</span>}
             {warn && <span className="text-[8px] font-black uppercase bg-red-500 text-white px-1.5 py-0.5 rounded-full" title="3 faltas seguidas — contactar o aluno">contactar o aluno</span>}
             {!readOnly && <button onClick={() => openNotes(st)} title="Notas do aluno" className={`p-1 rounded-md ${note ? "text-amber-600" : "text-slate-300 hover:text-slate-500"}`}><Info size={14} /></button>}
@@ -3317,6 +3320,44 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
           </div>
         </div>
       )}
+
+      {infoCtx && (() => {
+        const onlyDigits = (s) => String(s || "").replace(/\D/g, "");
+        const waNum = (() => { let d = onlyDigits(infoCtx.whatsapp || infoCtx.telefone); if (!d) return ""; if (!d.startsWith("244") && d.length === 9) d = "244" + d; return d; })();
+        const infoRow = (icon, label, value, action) => (
+          <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl">
+            <div className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center text-indigo-600 shrink-0">{icon}</div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+              <p className="font-black text-slate-800 text-sm truncate">{value || "—"}</p>
+            </div>
+            {action}
+          </div>
+        );
+        return (
+          <div className="fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-md flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setInfoCtx(null)}>
+            <div className="bg-white rounded-[32px] p-6 w-full max-w-sm space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-indigo-500 text-white flex items-center justify-center font-black shrink-0">{subInitials(infoCtx.nome)}</div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-black text-slate-900 text-lg leading-tight truncate">{infoCtx.nome}</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Ficha do aluno</p>
+                </div>
+                <button onClick={() => setInfoCtx(null)} className="p-2 bg-slate-100 rounded-full active:scale-90"><X size={18} /></button>
+              </div>
+              <div className="space-y-2">
+                {infoRow(<Phone size={16} />, "Telefone", infoCtx.telefone, infoCtx.telefone && <a href={`tel:${onlyDigits(infoCtx.telefone)}`} className="text-[10px] font-black uppercase bg-slate-900 text-white px-3 py-1.5 rounded-full active:scale-95">Ligar</a>)}
+                {infoRow(<MessageCircle size={16} />, "WhatsApp", infoCtx.whatsapp, waNum && <a href={`https://wa.me/${waNum}`} target="_blank" rel="noopener noreferrer" className="text-[10px] font-black uppercase bg-emerald-500 text-white px-3 py-1.5 rounded-full active:scale-95">Abrir</a>)}
+                {infoRow(<Calendar size={16} />, "Idade", infoCtx.idade ? `${infoCtx.idade} anos` : "", null)}
+                {infoCtx.dataNasc && infoRow(<Cake size={16} />, "Nascimento", infoCtx.dataNasc, null)}
+              </div>
+              {!infoCtx.telefone && !infoCtx.whatsapp && !infoCtx.idade && (
+                <p className="text-[11px] font-bold text-amber-600 text-center">Sem dados na folha. Carrega em "Atualizar" para sincronizar.</p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
