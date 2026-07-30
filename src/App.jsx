@@ -2237,7 +2237,7 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
   const meName = actingTeacher?.name || "";
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
-  const myClasses = classes.filter((c) => c.teacherId === meId && c.active !== false);
+  const myClasses = classes.filter((c) => c.teacherId === form.absentTeacherId && c.active !== false);
   const pickClass = (cid) => {
     const cls = classes.find((c) => c.id === cid);
     if (!cls) { setForm((p) => ({ ...p, classId: "" })); return; }
@@ -3321,7 +3321,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   );
 };
 
-const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNavigate, onOpenAdmin, onSwitchTeacher, onLogout }) => {
+const Sidebar = ({ open, onClose, session, actingTeacher, accountTeacher, tabletMode, view, onNavigate, onOpenAdmin, onSwitchTeacher, onLogout }) => {
   const roles = getRoles(session);
   const isTeaching = roles.some((r) => ["teacher", "tuner", "assistant"].includes(r));
   const items = [];
@@ -3372,8 +3372,19 @@ const Sidebar = ({ open, onClose, session, actingTeacher, tabletMode, view, onNa
         {/* Account */}
         <div className="px-4 py-5 border-t border-slate-700/60">
           <div className="flex items-center gap-3 px-2 mb-3">
-            <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center font-black text-xs">{subInitials(actingTeacher?.name || "?")}</div>
-            <div className="min-w-0"><p className="font-black text-sm truncate">{actingTeacher?.name || session?.name || "—"}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest truncate">{roles.map((r) => ROLE_LABELS[r] || r).join(" · ")}</p></div>
+            {(() => {
+              const me = accountTeacher || actingTeacher;
+              const viewing = actingTeacher && me && actingTeacher.id !== me.id ? actingTeacher : null;
+              return (<>
+                <div className="w-9 h-9 rounded-full bg-indigo-500 flex items-center justify-center font-black text-xs">{subInitials(me?.name || session?.name || "?")}</div>
+                <div className="min-w-0">
+                  <p className="font-black text-sm truncate">{me?.name || session?.name || "—"}</p>
+                  {viewing
+                    ? <p className="text-[10px] text-amber-400 font-bold truncate">a ver turmas de {viewing.name}</p>
+                    : <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest truncate">{roles.map((r) => ROLE_LABELS[r] || r).join(" · ")}</p>}
+                </div>
+              </>);
+            })()}
           </div>
           <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-black text-xs uppercase tracking-widest bg-slate-800 text-slate-300 hover:bg-slate-700">
             <LogOut size={16} /> Sair
@@ -3912,6 +3923,13 @@ export default function App() {
     );
   }
 
+  // ── Identidade dos pedidos (subs/exames) e da barra lateral ─────────────────
+  // "Trocar professor" só muda QUE turmas se veem; a conta (quem faz os pedidos)
+  // continua a ser a conta logada. Em modo tablet, o aparelho é partilhado, por
+  // isso a identidade é o professor escolhido (actingTeacher).
+  const accountTeacher = teachers.find((t) => t.id === session?.teacherId) || null;
+  const requesterTeacher = tabletMode ? actingTeacher : (accountTeacher || actingTeacher);
+
   // ── Pending approval view ────────────────────────────────────────────────────
   if (pendingApproval) {
     return (
@@ -4101,7 +4119,7 @@ export default function App() {
         {toast}<PinModal /><Watermark />
         <Sidebar
           open={sidebarOpen} onClose={() => setSidebarOpen(false)}
-          session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
+          session={session} actingTeacher={actingTeacher} accountTeacher={requesterTeacher} tabletMode={tabletMode} view={view}
           onNavigate={sidebarNavigate}
           onOpenAdmin={() => { setSidebarOpen(false); setView("admin_home"); }}
           onSwitchTeacher={() => { setSidebarOpen(false); setTeacherSearch(""); }}
@@ -4188,7 +4206,7 @@ export default function App() {
 
       <Sidebar
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
-        session={session} actingTeacher={actingTeacher} tabletMode={tabletMode} view={view}
+        session={session} actingTeacher={actingTeacher} accountTeacher={requesterTeacher} tabletMode={tabletMode} view={view}
         onNavigate={sidebarNavigate}
         onOpenAdmin={() => { setSidebarOpen(false); setView("admin_home"); }}
         onSwitchTeacher={() => { setSidebarOpen(false); setView("choose_teacher"); setTeacherSearch(""); }}
@@ -4223,7 +4241,7 @@ export default function App() {
 
       {view === "subs" && actingTeacher && (
         <Substitutions
-          actingTeacher={actingTeacher} teachers={teachers} subs={subs}
+          actingTeacher={requesterTeacher} teachers={teachers} subs={subs}
           classes={classes} lessonPlans={lessonPlans} logs={logs}
           onSubmitSub={onSubmitSub} onConfirmSub={onConfirmSub} notify={notify}
           onBack={() => setView(originView || "teacher_home")}
@@ -4232,7 +4250,7 @@ export default function App() {
 
       {view === "tuners" && actingTeacher && (
         <Tuners
-          actingTeacher={actingTeacher} examReqs={examReqs} recoveryReqs={recoveryReqs}
+          actingTeacher={requesterTeacher} examReqs={examReqs} recoveryReqs={recoveryReqs}
           onAddTunerRequest={onAddTunerRequest} notify={notify}
           onBack={() => setView(originView || "teacher_home")}
         />
@@ -4248,7 +4266,7 @@ export default function App() {
 
       {view === "assistant" && actingTeacher && (
         <AssistantRequests
-          actingTeacher={actingTeacher} schools={session?.schools || []}
+          actingTeacher={requesterTeacher} schools={session?.schools || []}
           physExams={physExams} tkExercises={tkExercises}
           onAddAssistantRequest={onAddAssistantRequest} notify={notify}
           onBack={() => setView(originView || "teacher_home")}
