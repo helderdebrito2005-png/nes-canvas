@@ -3340,7 +3340,7 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-full bg-indigo-500 text-white flex items-center justify-center font-black shrink-0">{subInitials(infoCtx.nome)}</div>
                 <div className="min-w-0 flex-1">
-                  <p className="font-black text-slate-900 text-lg leading-tight truncate">{infoCtx.nome}</p>
+                  <p className="font-black text-slate-900 text-lg leading-tight break-words">{infoCtx.nome}</p>
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Ficha do aluno</p>
                 </div>
                 <button onClick={() => setInfoCtx(null)} className="p-2 bg-slate-100 rounded-full active:scale-90"><X size={18} /></button>
