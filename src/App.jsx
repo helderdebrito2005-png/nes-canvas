@@ -3060,13 +3060,15 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
   const rosterParados = (roster && roster !== "none" ? (roster.parados || []) : []).map((n) => (typeof n === "string" ? { nome: n } : n));
   const rosterKeys = new Set(students.map((s) => studentKey(s.nome)));
   const pendingStudents = (meta.added || []).filter((a) => !rosterKeys.has(studentKey(a.nome)));
+  // "stopped" (parado na app) tem prioridade sobre "reactivated": se um aluno reativado
+  // for parado de novo, volta aos parados mesmo que o reactivated ainda esteja marcado.
   const activeStudents = [
     ...students.filter((s) => !stoppedMap[studentKey(s.nome)]),
-    ...rosterParados.filter((s) => reactMap[studentKey(s.nome)]),
+    ...rosterParados.filter((s) => reactMap[studentKey(s.nome)] && !stoppedMap[studentKey(s.nome)]),
   ];
   const paradosStudents = [
     ...students.filter((s) => stoppedMap[studentKey(s.nome)]).map((s) => ({ ...s, reason: stoppedMap[studentKey(s.nome)]?.reason, fromApp: true })),
-    ...rosterParados.filter((s) => !reactMap[studentKey(s.nome)]).map((s) => ({ ...s, fromSheet: true })),
+    ...rosterParados.filter((s) => !reactMap[studentKey(s.nome)] || stoppedMap[studentKey(s.nome)]).map((s) => ({ ...s, reason: stoppedMap[studentKey(s.nome)]?.reason, fromSheet: true })),
   ];
 
   const openNotes = (st) => { const k = studentKey(st.nome); setNotesText(notesMap[k] || ""); setNotesCtx({ key: k, name: st.nome }); };
@@ -3090,9 +3092,11 @@ const Attendance = ({ selectedClass, session, notify, setView, originView, onSyn
     notify("Aluno adicionado (pendente).");
   };
   const reactivate = async (st) => {
-    const k = studentKey(st.nome); let next;
-    if (st.fromApp) { next = { ...meta, stopped: { ...stoppedMap } }; delete next.stopped[k]; }
-    else { next = { ...meta, reactivated: { ...reactMap, [k]: true } }; }
+    const k = studentKey(st.nome);
+    const next = { ...meta, stopped: { ...stoppedMap }, reactivated: { ...reactMap } };
+    delete next.stopped[k];                                  // limpa paragem na app (se houver)
+    if (st.fromSheet) next.reactivated[k] = true;            // veio dos parados da folha → marca reativado
+    else delete next.reactivated[k];
     await saveMeta(next); await notifyDir(`${st.nome} voltou a ATIVO em ${cls.name}.`); notify("Aluno reativado.");
   };
 
