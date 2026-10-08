@@ -125,6 +125,10 @@ const normRosterTime = (raw) => {
 };
 const studentKey = (nome) => "n_" + normRosterName(nome).replace(/[^A-Z0-9]+/g, "_");
 
+// Ordenação natural por número (ex.: Book 1/A < Book 1/B < Book 2/A < Book 10/A)
+const naturalCompare = (a, b) => String(a || "").trim().localeCompare(String(b || "").trim(), "pt", { numeric: true, sensitivity: "base" });
+const byPlanName = (a, b) => naturalCompare(a?.name, b?.name);
+
 // Extrai blocos de turma da folha: cabeçalho (hora|turma|PROFESSOR) + alunos até "ALUNOS PARADOS"
 function parseRoster(text) {
   const rows = parseCSV(text);
@@ -988,6 +992,7 @@ const AdminDashboard = ({
   const [editCls, setEditCls] = useState({ time: "", room: "", teacherId: "", lessonPlanId: "", school: "", type: "DM" });
   const [isEditingPlan, setIsEditingPlan] = useState(false);
   const [activePlan, setActivePlan] = useState({ name: "", blocks: [] });
+  const [delPlanId, setDelPlanId] = useState(null);
   const [newPinInput, setNewPinInput] = useState("");
   const [analiseFilter, setAnaliseFilter] = useState("all"); // all|BEHIND|ON|AHEAD|noDict|noOral
   const [urlDraft, setUrlDraft] = useState(rosterUrls);
@@ -1649,11 +1654,12 @@ const AdminDashboard = ({
                 </div>
                 <button onClick={async () => {
                   if (!activePlan.name) return notify("Erro: Plano sem título!");
-                  await onAdd("lessonPlans", { ...activePlan, active: true });
+                  const { id, ...data } = activePlan;
+                  if (id) { await onUpdate("lessonPlans", id, { ...data, active: true }); notify("Plano atualizado!"); }
+                  else { await onAdd("lessonPlans", { ...data, active: true }); notify("Plano criado!"); }
                   setIsEditingPlan(false);
-                  notify("Plano criado!");
                 }} className="w-full p-5 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-lg">
-                  Sincronizar Plano
+                  {activePlan.id ? "Guardar Alterações" : "Sincronizar Plano"}
                 </button>
               </div>
             )}
@@ -1668,10 +1674,28 @@ const AdminDashboard = ({
                       </span>
                     </div>
                   </div>
-                  <button onClick={() => { setActivePlan(p); setIsEditingPlan(true); }}
-                    className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl active:scale-90 shadow-sm">
-                    <Settings size={18} />
-                  </button>
+                  {delPlanId === p.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black text-red-500 uppercase">Apagar?</span>
+                      <button onClick={async () => {
+                        const used = classes.filter((c) => c.lessonPlanId === p.id).length;
+                        if (used) { setDelPlanId(null); return notify(`Em uso por ${used} turma(s). Troque o plano dessas turmas primeiro.`); }
+                        await onRemove("lessonPlans", p.id); setDelPlanId(null); notify("Plano apagado.");
+                      }} className="px-3 py-2 bg-red-600 text-white rounded-xl font-black text-[10px] uppercase active:scale-90">Sim</button>
+                      <button onClick={() => setDelPlanId(null)} className="px-3 py-2 bg-slate-100 text-slate-500 rounded-xl font-black text-[10px] uppercase active:scale-90">Não</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setActivePlan(p); setIsEditingPlan(true); }}
+                        className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl active:scale-90 shadow-sm">
+                        <Settings size={18} />
+                      </button>
+                      <button onClick={() => setDelPlanId(p.id)} title="Apagar plano"
+                        className="p-3 bg-red-50 text-red-500 rounded-2xl active:scale-90 shadow-sm">
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -3644,7 +3668,7 @@ export default function App() {
       onSnapshot(collection(db, "notifications"), (s) => { setNotifications(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "teachers"),    (s) => { setTeachers(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "classes"),     (s) => { setClasses(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
-      onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
+      onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() })).sort(byPlanName)); check(); }),
       onSnapshot(collection(db, "logs"),        (s) => { setLogs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "users"),       (s) => { setAccounts(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "substitutions"), (s) => { setSubs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
