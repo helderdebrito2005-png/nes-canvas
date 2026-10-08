@@ -3668,7 +3668,7 @@ export default function App() {
       onSnapshot(collection(db, "notifications"), (s) => { setNotifications(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
       onSnapshot(collection(db, "teachers"),    (s) => { setTeachers(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "classes"),     (s) => { setClasses(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
-      onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ id: d.id, ...d.data() })).sort(byPlanName)); check(); }),
+      onSnapshot(collection(db, "lessonPlans"), (s) => { setLessonPlans(s.docs.map((d) => ({ ...d.data(), id: d.id })).sort(byPlanName)); check(); }),
       onSnapshot(collection(db, "logs"),        (s) => { setLogs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "users"),       (s) => { setAccounts(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }),
       onSnapshot(collection(db, "substitutions"), (s) => { setSubs(s.docs.map((d) => ({ id: d.id, ...d.data() }))); check(); }, () => check()),
