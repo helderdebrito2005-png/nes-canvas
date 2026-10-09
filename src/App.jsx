@@ -2743,21 +2743,37 @@ const Tuners = ({ actingTeacher, examReqs, recoveryReqs, onAddTunerRequest, noti
 // ═══════════════════════════════════════════════════════════════════════════════
 // TUNER DEPARTMENT  —  tuner-facing (ver todos os pedidos, assumir, formulários)
 // ═══════════════════════════════════════════════════════════════════════════════
-const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRequest, onDeleteTunerRequest, notify, onBack }) => {
+const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRequest, notify, onBack }) => {
   const [tab, setTab] = useState("exam");
+  const [confirmCtx, setConfirmCtx] = useState(null); // { mode: "admit"|"cancel", kind, r }
   const meId = actingTeacher?.id;
   const meName = actingTeacher?.name || "";
-  const claim = async (kind, r) => { try { await onClaimTunerRequest(kind, r.id, meId, meName); notify("Assumiu o pedido de " + r.teacherName + "."); } catch (e) { notify("Erro: " + (e?.message || e)); } };
-  const del = async (kind, r) => { if (window.confirm("Remover este pedido?")) await onDeleteTunerRequest(kind, r.id); };
+
+  const doConfirm = async () => {
+    if (!confirmCtx) return;
+    const { mode, kind, r } = confirmCtx;
+    setConfirmCtx(null);
+    try {
+      if (mode === "admit") { await onClaimTunerRequest(kind, r.id, meId, meName); notify("Admitiu o pedido de " + r.teacherName + "."); }
+      else { await onClaimTunerRequest(kind, r.id, "", ""); notify("Admissão cancelada."); }
+    } catch (e) { notify("Erro: " + (e?.message || e)); }
+  };
 
   const exams = [...examReqs].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.time || "").localeCompare(b.time || ""));
   const recs = [...recoveryReqs].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const openExams = exams.filter((r) => !r.tunerId).length;
   const openRecs = recs.filter((r) => !r.tunerId).length;
 
-  const claimCell = (kind, r) => r.tunerId
-    ? <span className="font-black text-emerald-600 text-[12px]">{r.tunerName}</span>
-    : <button onClick={() => claim(kind, r)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest active:scale-95">Assumir</button>;
+  const claimCell = (kind, r) => {
+    if (!r.tunerId) return <button onClick={() => setConfirmCtx({ mode: "admit", kind, r })} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest active:scale-95">Admitir</button>;
+    if (r.tunerId === meId) return (
+      <div className="flex items-center gap-2">
+        <span className="font-black text-emerald-600 text-[12px]">Você</span>
+        <button onClick={() => setConfirmCtx({ mode: "cancel", kind, r })} className="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-[10px] font-black uppercase tracking-widest active:scale-95">Cancelar</button>
+      </div>
+    );
+    return <span className="font-black text-emerald-600 text-[12px]">{r.tunerName}</span>;
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 pb-24 text-left animate-in fade-in duration-300">
@@ -2765,7 +2781,7 @@ const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRe
         <div className="flex items-center gap-3">
           {onBack && <button onClick={onBack} className="p-2 bg-slate-100 rounded-full active:scale-90" title="Voltar"><ArrowLeft size={20} /></button>}
           <div className="flex-1">
-            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><ShieldCheck size={22} className="text-indigo-600" /> Tuner Department</h1>
+            <h1 className="text-2xl font-black text-slate-900 leading-none flex items-center gap-2"><ShieldCheck size={22} className="text-indigo-600" /> Tuning Department</h1>
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Todos os pedidos de exame e recuperação</p>
           </div>
         </div>
@@ -2788,7 +2804,7 @@ const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRe
           {tab === "exam" && (
             <table className="w-full text-left text-sm min-w-[560px]">
               <thead><tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b">
-                <th className="p-4">Teacher</th><th className="p-4">Time</th><th className="p-4">Students</th><th className="p-4">Book</th><th className="p-4">Date</th><th className="p-4">Tuner</th><th className="p-4"></th>
+                <th className="p-4">Teacher</th><th className="p-4">Time</th><th className="p-4">Students</th><th className="p-4">Book</th><th className="p-4">Date</th><th className="p-4">Tuner</th>
               </tr></thead>
               <tbody>
                 {exams.length ? exams.map((r) => (
@@ -2799,16 +2815,15 @@ const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRe
                     <td className="p-4 font-bold text-slate-600">{r.book}</td>
                     <td className="p-4 font-bold text-slate-600">{fmtDatePt(r.date)}</td>
                     <td className="p-4">{claimCell("exam", r)}</td>
-                    <td className="p-4"><button onClick={() => del("exam", r)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button></td>
                   </tr>
-                )) : <tr><td colSpan={7} className="p-8 text-center text-slate-400 font-bold">Sem pedidos de exame.</td></tr>}
+                )) : <tr><td colSpan={6} className="p-8 text-center text-slate-400 font-bold">Sem pedidos de exame.</td></tr>}
               </tbody>
             </table>
           )}
           {tab === "recovery" && (
             <table className="w-full text-left text-sm min-w-[560px]">
               <thead><tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b">
-                <th className="p-4">Teacher</th><th className="p-4">Aulas</th><th className="p-4">Students</th><th className="p-4">Book</th><th className="p-4">Date</th><th className="p-4">Tuner</th><th className="p-4"></th>
+                <th className="p-4">Teacher</th><th className="p-4">Aulas</th><th className="p-4">Students</th><th className="p-4">Book</th><th className="p-4">Date</th><th className="p-4">Tuner</th>
               </tr></thead>
               <tbody>
                 {recs.length ? recs.map((r) => (
@@ -2819,14 +2834,32 @@ const TunerDepartment = ({ actingTeacher, examReqs, recoveryReqs, onClaimTunerRe
                     <td className="p-4 font-bold text-slate-600">{r.book}</td>
                     <td className="p-4 font-bold text-slate-600">{fmtDatePt(r.date)}</td>
                     <td className="p-4">{claimCell("recovery", r)}</td>
-                    <td className="p-4"><button onClick={() => del("recovery", r)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button></td>
                   </tr>
-                )) : <tr><td colSpan={7} className="p-8 text-center text-slate-400 font-bold">Sem pedidos de recuperação.</td></tr>}
+                )) : <tr><td colSpan={6} className="p-8 text-center text-slate-400 font-bold">Sem pedidos de recuperação.</td></tr>}
               </tbody>
             </table>
           )}
         </div>
       </main>
+
+      {confirmCtx && (
+        <div className="fixed inset-0 z-[120] bg-slate-950/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setConfirmCtx(null)}>
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <p className="font-black text-slate-800 text-lg">{confirmCtx.mode === "admit" ? "Admitir pedido" : "Cancelar admissão"}</p>
+            <p className="text-[13px] font-bold text-slate-500 leading-relaxed">
+              {confirmCtx.mode === "admit"
+                ? <>Vais ficar responsável pelo pedido de <span className="text-slate-800">{confirmCtx.r.teacherName}</span> ({fmtDatePt(confirmCtx.r.date)}). Confirmar?</>
+                : <>Queres mesmo <span className="text-red-600">cancelar a tua admissão</span> do pedido de <span className="text-slate-800">{confirmCtx.r.teacherName}</span>? Volta a ficar em aberto para outro tuner.</>}
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmCtx(null)} className="flex-1 p-3 bg-slate-100 rounded-xl font-black text-slate-500 text-sm">Voltar</button>
+              <button onClick={doConfirm} className={`flex-1 p-3 rounded-xl font-black text-sm text-white ${confirmCtx.mode === "admit" ? "bg-indigo-600" : "bg-red-600"}`}>
+                {confirmCtx.mode === "admit" ? "Admitir" : "Cancelar admissão"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -3524,7 +3557,7 @@ const Sidebar = ({ open, onClose, session, actingTeacher, accountTeacher, tablet
       { label: "Assistente", icon: ListChecks, view: "assistant" },
     );
   }
-  if (roles.includes("tuner")) items.push({ label: "Tuner Department", icon: ShieldCheck, view: "tuner_dept" });
+  if (roles.includes("tuner")) items.push({ label: "Tuning Department", icon: ShieldCheck, view: "tuner_dept" });
   if (roles.includes("assistant")) items.push({ label: "Departamento Assistente", icon: ShieldCheck, view: "assistant_dept" });
   if (roles.includes("recepcionista")) items.push({ label: "Recepção", icon: BookOpen, view: "reception" });
 
