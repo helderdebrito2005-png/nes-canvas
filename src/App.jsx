@@ -267,7 +267,13 @@ async function seedFirestoreIfEmpty() {
   await batch.commit();
 }
 
-// ─── Progress calculation (unchanged logic) ───────────────────────────────────
+// Tipos que contam como "grammar lesson" (GL = GR): C, GR, OR, GL (e variantes C/GR/OR, G/C, C/V, Vocab)
+const GL_TOKENS = new Set(["C", "GR", "GL", "OR", "V", "VOCAB"]);
+const isGLType = (t) => String(t || "").toUpperCase().split(/[^A-Z]+/).filter(Boolean).some((tok) => GL_TOKENS.has(tok));
+// Bloco de páginas = tem intervalo de páginas válido (os blocos de gramática no plano só têm dias, sem páginas)
+const isPageBlock = (b) => { const s = parseInt(b?.startPage, 10), e = parseInt(b?.endPage, 10); return Number.isFinite(s) && Number.isFinite(e) && e > s; };
+
+// ─── Progress calculation ─────────────────────────────────────────────────────
 const calculateProgress = (classId, logs, lessonPlans, classObj) => {
   if (!classObj || !lessonPlans?.length)
     return { lastEndPage: 0, status: "ON TRACK", statusLabel: "A CARREGAR...",
@@ -291,38 +297,46 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
       activeBlock: null, progressNote: "", dictationCount,
       lastWord: lastLog?.lastWord || "", lastLog, planComplete: false, noPlan: true, lessonDelta: 0 };
 
-  let activeBlock = plan.blocks.find((b) => {
+  // Track de páginas NORMAIS: blocos "Pages" (com páginas) + aulas que NÃO são de gramática.
+  // As aulas de gramática (C/GR/OR/GL) têm numeração própria e não contam para as páginas normais.
+  const glPlanBlocks = plan.blocks.filter((b) => !isPageBlock(b) && isGLType(b.type));
+  const hasGL = glPlanBlocks.length > 0;
+  const pageBlocks = plan.blocks.filter(isPageBlock);
+  const nb = pageBlocks.length ? pageBlocks : plan.blocks;
+  const trackLogs = hasGL ? classLogs.filter((l) => !isGLType(l.type)) : classLogs;
+
+  const trackLast = trackLogs[trackLogs.length - 1] || null;
+  const nLastEndPage = trackLast ? parseInt(trackLast.endPage || 0, 10) : 0;
+
+  let activeBlock = nb.find((b) => {
     const s = parseInt(b.startPage || 0, 10);
     const e = parseInt(b.endPage || 0, 10);
-    return lastEndPage >= s && lastEndPage < e;
+    return nLastEndPage >= s && nLastEndPage < e;
   });
   if (!activeBlock) {
-    const lastBlock = plan.blocks[plan.blocks.length - 1];
-    activeBlock = lastEndPage >= parseInt(lastBlock.endPage || 0, 10) ? lastBlock : plan.blocks[0];
+    const lastBlock = nb[nb.length - 1];
+    activeBlock = nLastEndPage >= parseInt(lastBlock.endPage || 0, 10) ? lastBlock : nb[0];
   }
 
   const blockStart = parseInt(activeBlock.startPage || 0, 10) || 0;
   const blockEnd   = parseInt(activeBlock.endPage   || 0, 10) || 0;
   const expectedLessonsForBlock = parseInt(activeBlock.expectedLessons || 0, 10) || 1;
 
-  const lessonsInCurrentBlock = classLogs.filter((l) => {
+  const lessonsInCurrentBlock = trackLogs.filter((l) => {
     const ep = parseInt(l.endPage || 0, 10) || 0;
     return ep >= blockStart && ep <= blockEnd;
   }).length;
 
   const pagesInBlock  = Math.max(0, blockEnd - blockStart);
   const pagesPerLesson = pagesInBlock / expectedLessonsForBlock || 0;
-  const actualPagesDone = Math.max(0, lastEndPage - blockStart);
+  const actualPagesDone = Math.max(0, nLastEndPage - blockStart);
   const daysValueForPagesDone = pagesPerLesson > 0 ? actualPagesDone / pagesPerLesson : 0;
   const lessonDelta = daysValueForPagesDone - lessonsInCurrentBlock;
 
   let status = "ON TRACK", statusLabel = "EM DIA",
     colorClass = "text-green-600 bg-green-50 border-green-100";
 
-  if (lastLog?.isCustomType) {
-    status = "BEHIND"; statusLabel = "ATRASADO (AULA EXTRA)";
-    colorClass = "text-red-600 bg-red-50 border-red-100";
-  } else if (lessonDelta <= -1) {
+  if (lessonDelta <= -1) {
     status = "BEHIND"; statusLabel = "ATRASADO";
     colorClass = "text-red-600 bg-red-50 border-red-100";
   } else if (lessonDelta >= 1.5) {
@@ -330,17 +344,17 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
     colorClass = "text-blue-600 bg-blue-50 border-blue-100";
   }
 
-  const planLastPage = parseInt(plan.blocks[plan.blocks.length - 1].endPage || 0, 10) || 0;
-  const planComplete = lastEndPage > 0 && lastEndPage >= planLastPage;
-  const pagesLeft   = Math.max(0, blockEnd - lastEndPage);
+  const planLastPage = parseInt(nb[nb.length - 1].endPage || 0, 10) || 0;
+  const planComplete = nLastEndPage > 0 && nLastEndPage >= planLastPage;
+  const pagesLeft   = Math.max(0, blockEnd - nLastEndPage);
   const lessonsLeft = Math.max(0, expectedLessonsForBlock - lessonsInCurrentBlock);
   let progressNote = "";
   if (pagesLeft === 0) progressNote = "Fase concluída! Siga para o próximo bloco.";
   else if (lessonsLeft > 0) progressNote = `Faltam ${pagesLeft} páginas para terminar em ${lessonsLeft} aulas`;
   else progressNote = `Atraso: faltam ${pagesLeft} páginas (aulas planeadas já usadas)`;
 
-  return { lastEndPage, status, statusLabel, colorClass, activeBlock,
-    progressNote, dictationCount, lastWord: lastLog?.lastWord || "", lastLog, planComplete, noPlan: false, lessonDelta: Math.round(lessonDelta) };
+  return { lastEndPage: nLastEndPage, status, statusLabel, colorClass, activeBlock,
+    progressNote, dictationCount, lastWord: trackLast?.lastWord || "", lastLog: trackLast, planComplete, noPlan: false, lessonDelta: Math.round(lessonDelta), hasGL };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
