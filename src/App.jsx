@@ -353,8 +353,24 @@ const calculateProgress = (classId, logs, lessonPlans, classObj) => {
   else if (lessonsLeft > 0) progressNote = `Faltam ${pagesLeft} páginas para terminar em ${lessonsLeft} aulas`;
   else progressNote = `Atraso: faltam ${pagesLeft} páginas (aulas planeadas já usadas)`;
 
+  // ── Grammar (GL) por DIAS: dias de gramática dados vs. os que já deviam estar dados
+  // ao ritmo do curso (fração de aulas normais feitas × dias de gramática planeados). ──
+  let gl = null;
+  if (hasGL) {
+    const glDaysPlanned = glPlanBlocks.reduce((a, b) => a + (parseInt(b.expectedLessons, 10) || 0), 0);
+    const normalPlanned = nb.reduce((a, b) => a + (parseInt(b.expectedLessons, 10) || 0), 0) || 1;
+    const glUsed = classLogs.length - trackLogs.length; // nº de aulas de gramática dadas
+    const frac = Math.min(1, trackLogs.length / normalPlanned);
+    const expectedGL = glDaysPlanned * frac;
+    const glDelta = glUsed - expectedGL;
+    let gStatus = "ON TRACK", gLabel = "EM DIA", gColor = "text-green-600 bg-green-50 border-green-100";
+    if (glDelta <= -1) { gStatus = "BEHIND"; gLabel = "ATRASADO"; gColor = "text-red-600 bg-red-50 border-red-100"; }
+    else if (glDelta >= 1) { gStatus = "AHEAD"; gLabel = "ADIANTADO"; gColor = "text-blue-600 bg-blue-50 border-blue-100"; }
+    gl = { status: gStatus, statusLabel: gLabel, colorClass: gColor, used: glUsed, planned: glDaysPlanned };
+  }
+
   return { lastEndPage: nLastEndPage, status, statusLabel, colorClass, activeBlock,
-    progressNote, dictationCount, lastWord: trackLast?.lastWord || "", lastLog: trackLast, planComplete, noPlan: false, lessonDelta: Math.round(lessonDelta), hasGL };
+    progressNote, dictationCount, lastWord: trackLast?.lastWord || "", lastLog: trackLast, planComplete, noPlan: false, lessonDelta: Math.round(lessonDelta), hasGL, gl };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -593,6 +609,14 @@ const TeacherHome = ({
                 </div>
                 <div className="flex flex-col gap-1 items-end">
                   <Badge status={prog.status} label={prog.statusLabel} colorClass={prog.colorClass} />
+                  {prog.gl && (
+                    <div className={`px-2 py-1 rounded-full text-[9px] font-black flex items-center gap-1 uppercase border ${prog.gl.colorClass}`} title={`Grammar: ${prog.gl.used}/${prog.gl.planned} dias`}>
+                      {prog.gl.status === "BEHIND" && <TrendingDown size={10} />}
+                      {prog.gl.status === "AHEAD" && <TrendingUp size={10} />}
+                      {prog.gl.status === "ON TRACK" && <CheckCircle2 size={10} />}
+                      GL · {prog.gl.statusLabel}
+                    </div>
+                  )}
                   {prog.activeBlock && (
                     <div className="px-2 py-1 rounded-full text-[9px] font-black bg-slate-100 text-slate-500 uppercase border border-slate-200 flex items-center gap-1">
                       <Map size={10} /> {prog.activeBlock.type}
