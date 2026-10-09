@@ -496,10 +496,56 @@ const ReceptionView = ({ classes, teachers, logs, lessonPlans, attendance = [], 
   );
 };
 
+const NotifBell = ({ notifications = [], meId, roles = [], onNavigate, onMarkRead, onMarkAllRead }) => {
+  const [open, setOpen] = useState(false);
+  const relevant = useMemo(() => notifications.filter((n) => {
+    if (n.toTeacherId) return n.toTeacherId === meId;
+    if (n.audience === "all_teachers") return roles.includes("teacher") && n.by !== meId;
+    if (n.audience === "tuner") return roles.includes("tuner");
+    if (n.audience === "assistant") return roles.includes("assistant");
+    return false;
+  }).sort((a, b) => (b.ts?.seconds || 0) - (a.ts?.seconds || 0)), [notifications, meId, roles]);
+  const unread = relevant.filter((n) => !(n.readBy && n.readBy[meId]));
+  const top = relevant.slice(0, 20);
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((v) => !v)} className="relative p-2 bg-slate-100 rounded-full active:scale-90 transition-all shadow-sm" title="Notificações">
+        <Bell size={20} />
+        {unread.length > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center">{unread.length}</span>}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-80 max-w-[85vw] bg-white rounded-2xl shadow-2xl border z-50 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <p className="font-black text-sm text-slate-800">Notificações</p>
+              {unread.length > 0 && <button onClick={() => onMarkAllRead(unread.map((n) => n.id))} className="text-[10px] font-black uppercase tracking-widest text-indigo-600 active:scale-95">Marcar todas</button>}
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto">
+              {top.length === 0 && <p className="px-4 py-8 text-center text-slate-400 font-bold text-sm">Sem notificações.</p>}
+              {top.map((n) => {
+                const isUnread = !(n.readBy && n.readBy[meId]);
+                return (
+                  <button key={n.id} onClick={() => { onMarkRead(n.id); setOpen(false); if (n.view) onNavigate(n.view); }}
+                    className={`w-full text-left px-4 py-3 border-b last:border-0 flex gap-3 active:bg-slate-50 ${isUnread ? "bg-indigo-50/40" : ""}`}>
+                    <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${isUnread ? "bg-indigo-500" : "bg-slate-200"}`} />
+                    <p className="text-[13px] font-bold text-slate-700 leading-snug min-w-0">{n.message}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const TeacherHome = ({
   actingTeacher, tabletMode, classes, logs, lessonPlans, rosters = [], subs = [],
   setView, setSelectedClass, setOriginView,
   onSwitchTeacher, onOpenAdmin, onOpenSubs, onExit, canOpenAdmin, onSetClassPlan,
+  notifications = [], meId, roles = [], onNotifNavigate, onMarkNotifRead, onMarkAllNotifRead,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const myClasses = useMemo(() => {
@@ -546,6 +592,8 @@ const TeacherHome = ({
             </div>
           </div>
           <div className="flex gap-2">
+            <NotifBell notifications={notifications} meId={meId} roles={roles}
+              onNavigate={onNotifNavigate} onMarkRead={onMarkNotifRead} onMarkAllRead={onMarkAllNotifRead} />
             <button onClick={onOpenSubs} className="p-2 bg-indigo-50 text-indigo-600 rounded-full active:scale-90 transition-all shadow-sm" title="Substituições">
               <Repeat size={20} />
             </button>
@@ -2286,12 +2334,13 @@ const AdminDashboard = ({
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUBSTITUTIONS  —  teacher-facing (Pedir / Confirmar / Quadro)
 // ═══════════════════════════════════════════════════════════════════════════════
-const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlans = [], logs = [], onSubmitSub, onConfirmSub, notify, onBack }) => {
+const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlans = [], logs = [], onSubmitSub, onConfirmSub, onClaimSub, notify, onBack }) => {
   const [tab, setTab] = useState("request");
   const [form, setForm] = useState({
     classId: "", absentTeacherId: actingTeacher?.id || "", date: getTodayStr(), time: "", room: "", book: "", page: "",
     lessontype: "", lessonnotes: "", subTeacherId: "", reason: "",
   });
+  const [openMode, setOpenMode] = useState(false);
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState("");
@@ -2317,30 +2366,40 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
   const submit = async () => {
     setFormError("");
     const { date, time, room, book, page, lessontype, lessonnotes, subTeacherId, reason, absentTeacherId } = form;
-    if (!absentTeacherId || !date || !time || !room || !book || !page || !lessontype || !lessonnotes || !subTeacherId || !reason) {
+    const needSub = !openMode;
+    if (!absentTeacherId || !date || !time || !room || !book || !page || !lessontype || !lessonnotes || !reason || (needSub && !subTeacherId)) {
       setFormError("Preencha todos os campos obrigatórios."); return;
     }
     if (!twoHoursOk(date, time)) { setFormError("Tem de ser pelo menos 2 horas antes da hora da aula."); return; }
     const absName = teachers.find((t) => t.id === absentTeacherId)?.name || meName;
     const dup = subs.find((r) => r.absentTeacherId === absentTeacherId && r.date === date && r.time === time);
-    if (dup) { setFormError(`Já existe um pedido para ${absName} em ${fmtDatePt(date)} às ${time} (substituto: ${dup.subName}).`); return; }
-    const subName = teachers.find((t) => t.id === subTeacherId)?.name || "";
+    if (dup) { setFormError(`Já existe um pedido para ${absName} em ${fmtDatePt(date)} às ${time} (substituto: ${dup.subName || "em aberto"}).`); return; }
+    const subName = openMode ? "" : (teachers.find((t) => t.id === subTeacherId)?.name || "");
     setSubmitting(true);
     try {
       await onSubmitSub({
         absentTeacherId, absentName: absName,
-        subTeacherId, subName,
+        subTeacherId: openMode ? "" : subTeacherId, subName,
         classId: form.classId || "", className: classes.find((c) => c.id === form.classId)?.name || "",
         date, time, room, book, page, lessontype, lessonnotes, reason,
         submittedByTeacherId: meId,
       });
       setForm({ classId: "", absentTeacherId: actingTeacher?.id || "", date: getTodayStr(), time: "", room: "", book: "", page: "", lessontype: "", lessonnotes: "", subTeacherId: "", reason: "" });
-      notify(`Pedido enviado. ${subName} foi avisado(a).`);
+      setOpenMode(false);
+      notify(openMode ? "Pedido em aberto enviado. Todos os professores foram avisados." : `Pedido enviado. ${subName} foi avisado(a).`);
       setTab("board");
     } catch (e) {
       setFormError("Erro ao enviar: " + (e?.message || e));
     } finally { setSubmitting(false); }
   };
+
+  const claim = async (r) => {
+    try { await onClaimSub(r, meId, meName); notify("Aceitaste cobrir esta aula. Confirma o compromisso de pontualidade."); setTab("confirm"); }
+    catch (e) { notify("Erro: " + (e?.message || e)); }
+  };
+  // Subs em aberto (sem substituto), que não são o próprio pedido do professor
+  const openList = subs.filter((r) => !r.subTeacherId && !r.confirmed && r.submittedByTeacherId !== meId && r.date >= td)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
 
   const confirm = async (r) => {
     if (!agreed[r.id]) { notify("Confirme primeiro o compromisso de pontualidade."); return; }
@@ -2378,20 +2437,23 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
     </div>
   );
 
-  const BoardRow = (r) => (
+  const BoardRow = (r) => {
+    const isOpen = !r.subTeacherId;
+    return (
     <div key={r.id} className="flex items-center gap-3 py-3 border-b border-slate-100 last:border-0">
-      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-[10px] shrink-0 ${r.confirmed ? "bg-indigo-50 text-indigo-600" : "bg-amber-100 text-amber-700"}`}>{subInitials(r.subName)}</div>
+      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-[10px] shrink-0 ${isOpen ? "bg-slate-100 text-slate-400" : r.confirmed ? "bg-indigo-50 text-indigo-600" : "bg-amber-100 text-amber-700"}`}>{isOpen ? "?" : subInitials(r.subName)}</div>
       <div className="flex-1 min-w-0">
-        <p className="font-black text-slate-800 text-sm leading-none truncate">{r.subName} <span className="font-medium text-slate-400">→ {r.absentName}</span></p>
+        <p className="font-black text-slate-800 text-sm leading-none truncate">{isOpen ? <span className="text-indigo-600">Em aberto</span> : r.subName} <span className="font-medium text-slate-400">→ {r.absentName}</span></p>
         <p className="text-[11px] font-bold text-slate-400 mt-1 truncate">{r.time} · {r.room} · {r.book} · p.{r.page} · {r.lessontype}</p>
       </div>
-      <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase border ${r.confirmed ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{r.confirmed ? "Confirmado" : "Pendente"}</span>
+      <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase border ${isOpen ? "bg-indigo-50 text-indigo-600 border-indigo-200" : r.confirmed ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{isOpen ? "Em aberto" : r.confirmed ? "Confirmado" : "Pendente"}</span>
     </div>
-  );
+    );
+  };
 
   const todayList = subs.filter((r) => r.date === td).sort((a, b) => a.time.localeCompare(b.time));
   const weekList = subs.filter((r) => r.date > td && r.date <= weekEnd).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-  const searchList = subs.filter((r) => !r.confirmed && r.subTeacherId !== meId &&
+  const searchList = subs.filter((r) => r.subTeacherId && !r.confirmed && r.subTeacherId !== meId &&
     (!search.trim() || r.subName?.toLowerCase().includes(search.toLowerCase()) || r.absentName?.toLowerCase().includes(search.toLowerCase())));
 
   return (
@@ -2470,12 +2532,18 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
 
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm space-y-3">
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400"><UserCheck size={14} /> Substituto & motivo</div>
-              <div><span className={labelCls}>Colega que aceitou cobrir *</span>
-                <select className={inputCls} value={form.subTeacherId} onChange={(e) => set("subTeacherId", e.target.value)}>
-                  <option value="">Selecionar colega</option>
-                  {teachers.filter((t) => t.id !== form.absentTeacherId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
+              <label className="flex items-center gap-2 p-3 bg-indigo-50 rounded-2xl border border-indigo-100 cursor-pointer">
+                <input type="checkbox" className="w-4 h-4 accent-indigo-600" checked={openMode} onChange={(e) => setOpenMode(e.target.checked)} />
+                <span className="text-[12px] font-black text-indigo-700">Deixar em aberto — qualquer colega pode aceitar</span>
+              </label>
+              {!openMode && (
+                <div><span className={labelCls}>Colega que aceitou cobrir *</span>
+                  <select className={inputCls} value={form.subTeacherId} onChange={(e) => set("subTeacherId", e.target.value)}>
+                    <option value="">Selecionar colega</option>
+                    {teachers.filter((t) => t.id !== form.absentTeacherId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>
+              )}
               <div><span className={labelCls}>Motivo da ausência *</span>
                 <select className={inputCls} value={form.reason} onChange={(e) => set("reason", e.target.value)}>
                   <option value="">Selecionar motivo</option>{SUB_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -2492,6 +2560,22 @@ const Substitutions = ({ actingTeacher, teachers, subs, classes = [], lessonPlan
 
         {tab === "confirm" && (
           <>
+            {openList.length > 0 && (
+              <div className="bg-white rounded-[28px] p-6 border-2 border-indigo-100 shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-indigo-500 mb-3"><Repeat size={14} /> Em aberto — alguém precisa de cobertura</div>
+                <div className="space-y-3">
+                  {openList.map((r) => (
+                    <div key={r.id} className="bg-indigo-50/40 rounded-2xl p-4 border border-indigo-100">
+                      <p className="font-black text-slate-800 leading-none">{r.className || "Aula"} <span className="font-medium text-slate-400">· {r.absentName}</span></p>
+                      <p className="text-[11px] font-bold text-slate-400 mt-1">{fmtDatePt(r.date)} às {r.time} · {r.room} · {r.book} · p.{r.page} · {r.lessontype}</p>
+                      <button onClick={() => claim(r)} className="w-full mt-3 p-3 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[11px] tracking-widest active:scale-95 flex items-center justify-center gap-2">
+                        <CheckCircle2 size={14} /> Eu cubro esta aula
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3"><Bell size={14} /> As suas substituições pendentes</div>
               {myPending.length ? <div className="space-y-3">{myPending.sort((a, b) => a.date.localeCompare(b.date)).map(SubCard)}</div>
@@ -3838,15 +3922,39 @@ export default function App() {
     try { await deleteDoc(doc(db, "notifications", id)); } catch {}
   }, []);
 
+  // ── Notificações dirigidas (sino) ───────────────────────────────────────────
+  const pushNotif = useCallback(async (n) => {
+    try { await addDoc(collection(db, "notifications"), { readBy: {}, ts: serverTimestamp(), ...n }); } catch {}
+  }, []);
+  const markNotifRead = useCallback(async (id, meId) => {
+    if (!id || !meId) return;
+    try { await updateDoc(doc(db, "notifications", id), { ["readBy." + meId]: true }); } catch {}
+  }, []);
+  const markAllNotifRead = useCallback(async (ids, meId) => {
+    if (!meId) return;
+    for (const id of ids || []) { try { await updateDoc(doc(db, "notifications", id), { ["readBy." + meId]: true }); } catch {} }
+  }, []);
+
   // ── Substitutions CRUD → Firestore ──────────────────────────────────────────
   const onSubmitSub = useCallback(async (data) => {
+    const open = !data.subTeacherId;
     await addDoc(collection(db, "substitutions"), {
       ...data,
+      open,
       confirmed: false,
       confirmedAt: null,
       submittedAt: serverTimestamp(),
     });
-  }, []);
+    const quando = `${fmtDatePt(data.date)} às ${data.time}`;
+    const turma = data.className || "uma aula";
+    if (open) {
+      await pushNotif({ kind: "sub_open", view: "subs", audience: "all_teachers", by: data.submittedByTeacherId,
+        message: `Substituição em aberto: ${turma} em ${quando} (ausente: ${data.absentName}). Alguém pode cobrir?` });
+    } else {
+      await pushNotif({ kind: "sub_request", view: "subs", toTeacherId: data.subTeacherId, by: data.submittedByTeacherId,
+        message: `${data.absentName} pediu-te para cobrir ${turma} em ${quando}.` });
+    }
+  }, [pushNotif]);
 
   const onConfirmSub = useCallback(async (id) => {
     await updateDoc(doc(db, "substitutions", id), {
@@ -3854,6 +3962,15 @@ export default function App() {
       confirmedAt: serverTimestamp(),
     });
   }, []);
+
+  // Aceitar uma substituição em aberto (primeiro a aceitar leva) + avisar o pedinte.
+  const onClaimSub = useCallback(async (sub, meId, meName) => {
+    await updateDoc(doc(db, "substitutions", sub.id), { subTeacherId: meId, subName: meName, open: false });
+    if (sub.submittedByTeacherId && sub.submittedByTeacherId !== meId) {
+      await pushNotif({ kind: "sub_claimed", view: "subs", toTeacherId: sub.submittedByTeacherId, by: meId,
+        message: `${meName} aceitou cobrir ${sub.className || "a aula"} de ${sub.absentName} em ${fmtDatePt(sub.date)} às ${sub.time}.` });
+    }
+  }, [pushNotif]);
 
   const onDeleteSub = useCallback(async (id) => {
     await deleteDoc(doc(db, "substitutions", id));
@@ -3870,7 +3987,9 @@ export default function App() {
     await addDoc(collection(db, col), {
       ...data, tunerId: "", tunerName: "", createdAt: serverTimestamp(),
     });
-  }, []);
+    await pushNotif({ kind: kind === "exam" ? "exam_tuner" : "recovery_tuner", view: "tuner_dept", audience: "tuner", by: data.teacherId,
+      message: kind === "exam" ? `Novo exame oral pedido por ${data.teacherName}.` : `Novo pedido de recuperação por ${data.teacherName}.` });
+  }, [pushNotif]);
 
   const onClaimTunerRequest = useCallback(async (kind, id, tunerId, tunerName) => {
     const col = kind === "exam" ? "examRequests" : "recoveryRequests";
@@ -3886,7 +4005,9 @@ export default function App() {
   const onAddAssistantRequest = useCallback(async (kind, data) => {
     const col = kind === "exam" ? "physExamRequests" : "tkExerciseRequests";
     await addDoc(collection(db, col), { ...data, done: false, createdAt: serverTimestamp() });
-  }, []);
+    await pushNotif({ kind: kind === "exam" ? "exam_assistant" : "tk_assistant", view: "assistant_dept", audience: "assistant", by: data.teacherId,
+      message: kind === "exam" ? `Novo exame físico pedido por ${data.teacherName}.` : `Novo exercício TK pedido por ${data.teacherName}.` });
+  }, [pushNotif]);
 
   const onUpdateAssistantRequest = useCallback(async (kind, id, patch) => {
     const col = kind === "exam" ? "physExamRequests" : "tkExerciseRequests";
@@ -4343,6 +4464,10 @@ export default function App() {
             handleLogout();
           }}
           canOpenAdmin={getRoles(session).includes("admin")}
+          notifications={notifications} meId={requesterTeacher?.id} roles={getRoles(session)}
+          onNotifNavigate={(v) => { setOriginView("teacher_home"); setView(v); }}
+          onMarkNotifRead={(id) => markNotifRead(id, requesterTeacher?.id)}
+          onMarkAllNotifRead={(ids) => markAllNotifRead(ids, requesterTeacher?.id)}
         />
       )}
 
@@ -4350,7 +4475,7 @@ export default function App() {
         <Substitutions
           actingTeacher={requesterTeacher} teachers={teachers} subs={subs}
           classes={classes} lessonPlans={lessonPlans} logs={logs}
-          onSubmitSub={onSubmitSub} onConfirmSub={onConfirmSub} notify={notify}
+          onSubmitSub={onSubmitSub} onConfirmSub={onConfirmSub} onClaimSub={onClaimSub} notify={notify}
           onBack={() => setView(originView || "teacher_home")}
         />
       )}
