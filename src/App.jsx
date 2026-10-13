@@ -127,6 +127,9 @@ const studentKey = (nome) => "n_" + normRosterName(nome).replace(/[^A-Z0-9]+/g, 
 
 // Ordenação natural por número (ex.: Book 1/A < Book 1/B < Book 2/A < Book 10/A)
 const naturalCompare = (a, b) => String(a || "").trim().localeCompare(String(b || "").trim(), "pt", { numeric: true, sensitivity: "base" });
+// Hora "HH:MM" -> minutos (para ordenar turmas das 08:00 às 19:20)
+const timeToMin = (t) => { const m = String(t || "").match(/(\d{1,2}):(\d{2})/); return m ? (+m[1]) * 60 + (+m[2]) : 9999; };
+const byClassTime = (a, b) => timeToMin(a?.time) - timeToMin(b?.time) || String(a?.name || "").localeCompare(String(b?.name || ""));
 const byPlanName = (a, b) => naturalCompare(a?.name, b?.name);
 
 // Extrai blocos de turma da folha: cabeçalho (hora|turma|PROFESSOR) + alunos até "ALUNOS PARADOS"
@@ -554,7 +557,8 @@ const TeacherHome = ({
     return classes
       .filter((c) => c.teacherId === actingTeacher.id)
       .filter((c) => c.active !== false)
-      .filter((c) => c.name.toLowerCase().includes(st));
+      .filter((c) => c.name.toLowerCase().includes(st))
+      .sort(byClassTime);
   }, [classes, actingTeacher, searchTerm]);
 
   const summary = useMemo(() => {
