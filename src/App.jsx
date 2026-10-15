@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Users, PlusCircle, History, ChevronRight, CheckCircle2,
   TrendingUp, TrendingDown, Calendar, LogOut, DollarSign,
@@ -1110,8 +1110,11 @@ const AdminDashboard = ({
     const st = searchTerm.toLowerCase();
     return classes
       .filter((c) => viewSchool === "all" || c.school === viewSchool)
-      .filter((c) => c.name.toLowerCase().includes(st));
-  }, [classes, searchTerm, viewSchool]);
+      .filter((c) => c.name.toLowerCase().includes(st))
+      // agrupa por professor (alfabético) e, dentro de cada um, por hora (08:00 → 19:20).
+      // ordena pelo NOME da turma ("Professor • HH:MM") = o que o utilizador vê.
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", "pt", { numeric: true }) || timeToMin(a.time) - timeToMin(b.time));
+  }, [classes, searchTerm, viewSchool, teachers]);
 
   const missingLogsYesterday = useMemo(() => {
     const yesterday = getYesterdayStr();
@@ -3660,6 +3663,24 @@ export default function App() {
   const [view,          setView]          = useState("login");
   const [adminTab,      setAdminTab]      = useState("classes");
   const [originView,    setOriginView]    = useState("teacher_home");
+
+  // Memória de scroll por vista: ao voltar de um detalhe (histórico/registar/presenças)
+  // mantém a posição onde estavas na lista, em vez de saltar para o topo.
+  const scrollMem = useRef({});
+  const scrollViewRef = useRef("login");
+  const scrollRestoring = useRef(false);
+  useEffect(() => {
+    const onScroll = () => { if (!scrollRestoring.current) scrollMem.current[scrollViewRef.current] = window.scrollY; };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  useLayoutEffect(() => {
+    scrollRestoring.current = true;
+    scrollViewRef.current = view;
+    window.scrollTo(0, scrollMem.current[view] || 0);
+    const id = setTimeout(() => { scrollRestoring.current = false; }, 80);
+    return () => clearTimeout(id);
+  }, [view]);
   const [teachers,      setTeachers]      = useState([]);
   const [classes,       setClasses]       = useState([]);
   const [lessonPlans,   setLessonPlans]   = useState([]);
