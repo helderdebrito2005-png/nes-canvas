@@ -884,6 +884,8 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
 
   const alreadyDone = logs.some((l) => l.classId === selectedClass.id && l.date === getTodayStr());
   const isTK = selectedClass.type === "TK";
+  const isGrammar = isGLType(customTypeMode ? typeCustom : typeSelect); // aula de gramática → páginas GL
+  const pageUnit = isGrammar ? "GL" : "Página";
 
   return (
     <div className="min-h-screen bg-white p-8 text-left animate-in slide-in-from-bottom duration-500">
@@ -937,12 +939,12 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
 
         <div className="grid grid-cols-2 gap-6">
           <div className="space-y-3">
-            <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest leading-none">De (Página)</label>
+            <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest leading-none">De ({pageUnit})</label>
             <input type="number" className="w-full p-6 bg-slate-50 border-2 rounded-[32px] font-black text-2xl outline-none focus:border-indigo-500 shadow-inner"
               value={startPage} onChange={(e) => setStartPage(e.target.value)} />
           </div>
           <div className="space-y-3">
-            <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest leading-none">Até (Página)</label>
+            <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest leading-none">Até ({pageUnit})</label>
             <input type="number" className="w-full p-6 bg-slate-50 border-2 rounded-[32px] font-black text-2xl outline-none focus:border-indigo-500 shadow-inner"
               value={endPage} onChange={(e) => setEndPage(e.target.value)} />
           </div>
