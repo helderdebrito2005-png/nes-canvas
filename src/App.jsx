@@ -796,7 +796,10 @@ const ClassHistory = ({ selectedClass, logs, setView, originView, session, onEdi
             </div>
             {(log.readStart || log.readEnd) && (
               <div className="mt-3 text-[10px] font-black text-emerald-600 flex items-center gap-1.5 uppercase tracking-tighter">
-                <BookOpen size={12} /> Leitura: <span className="text-slate-900">pág. {log.readStart || "—"} à {log.readEnd || "—"}</span>
+                <BookOpen size={12} />
+                {selectedClass.type === "TK"
+                  ? <>Leitura: <span className="text-slate-900">pág. {log.readStart || "—"} à {log.readEnd || "—"}</span></>
+                  : <>Leitura: <span className="text-slate-900">Unidade {log.readStart || "—"}</span></>}
               </div>
             )}
             {log.lastWord && (
@@ -880,6 +883,7 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
   }, [lessonPlans, selectedClass.lessonPlanId]);
 
   const alreadyDone = logs.some((l) => l.classId === selectedClass.id && l.date === getTodayStr());
+  const isTK = selectedClass.type === "TK";
 
   return (
     <div className="min-h-screen bg-white p-8 text-left animate-in slide-in-from-bottom duration-500">
@@ -946,20 +950,29 @@ const LogLesson = ({ selectedClass, teachers, lessonPlans, logs, setView, notify
 
         <div className="p-5 bg-slate-50 rounded-[32px] border-2 border-slate-100 shadow-sm">
           <div className="flex items-center gap-2 mb-3"><div className="p-2 bg-emerald-100 text-emerald-600 rounded-xl"><BookOpen size={20} /></div><p className="font-black text-slate-700 text-sm leading-none">Leitura (Read)</p></div>
-          <div className="grid grid-cols-2 gap-4">
+          {isTK ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Da página</label>
+                <input type="number" min="0" placeholder="—"
+                  className="w-full mt-1 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+                  value={readStart} onChange={(e) => setReadStart(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">À página</label>
+                <input type="number" min="0" placeholder="—"
+                  className="w-full mt-1 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
+                  value={readEnd} onChange={(e) => setReadEnd(e.target.value)} />
+              </div>
+            </div>
+          ) : (
             <div>
-              <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Da página</label>
+              <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">Unidade</label>
               <input type="number" min="0" placeholder="—"
                 className="w-full mt-1 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
                 value={readStart} onChange={(e) => setReadStart(e.target.value)} />
             </div>
-            <div>
-              <label className="text-[10px] font-black uppercase text-slate-400 ml-1 tracking-widest">À página</label>
-              <input type="number" min="0" placeholder="—"
-                className="w-full mt-1 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black text-2xl text-center outline-none focus:border-indigo-500"
-                value={readEnd} onChange={(e) => setReadEnd(e.target.value)} />
-            </div>
-          </div>
+          )}
         </div>
 
         <div className="space-y-3">
