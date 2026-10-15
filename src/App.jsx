@@ -1084,6 +1084,8 @@ const AdminDashboard = ({
   const [newCls, setNewCls] = useState({ time: "", room: "", lessonPlanId: "", teacherId: "", school: "", type: "DM" });
   const [isAddingTeacher, setIsAddingTeacher] = useState(false);
   const [newTeacher, setNewTeacher] = useState({ name: "", rate: 2000 });
+  const [hoursFrom, setHoursFrom] = useState("");
+  const [hoursTo, setHoursTo] = useState("");
   const [editingTeacherId, setEditingTeacherId] = useState(null);
   const [editingClassId, setEditingClassId] = useState(null);
   const [editCls, setEditCls] = useState({ time: "", room: "", teacherId: "", lessonPlanId: "", school: "", type: "DM" });
@@ -1664,6 +1666,18 @@ const AdminDashboard = ({
                 </button>
               </div>
             )}
+            <div className="bg-white rounded-[24px] p-4 border shadow-sm">
+              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3"><Calendar size={14} /> Aulas no intervalo (opcional)</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">De</span>
+                  <input type="date" className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm" value={hoursFrom} onChange={(e) => setHoursFrom(e.target.value)} /></div>
+                <div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Até</span>
+                  <input type="date" className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm" value={hoursTo} onChange={(e) => setHoursTo(e.target.value)} /></div>
+              </div>
+              {(hoursFrom || hoursTo) && (
+                <button onClick={() => { setHoursFrom(""); setHoursTo(""); }} className="mt-3 text-[10px] font-black uppercase tracking-widest text-indigo-600 active:scale-95">Limpar intervalo (mostrar total)</button>
+              )}
+            </div>
             <div className="bg-white rounded-[32px] p-4 border divide-y shadow-sm">
               {teachers.map((t) => (
                 <div key={t.id} className="py-5 flex flex-col px-4">
@@ -1679,7 +1693,10 @@ const AdminDashboard = ({
                         {Number(t.rate || 0).toLocaleString()} AKZ/Hora
                       </p>
                       <p className="text-[11px] font-black text-green-600 mt-1">
-                        {logs.filter((l) => l.teacherId === t.id).length} aulas · {(logs.filter((l) => l.teacherId === t.id).length * (t.rate || 0)).toLocaleString()} AKZ
+                        {(() => {
+                          const n = logs.filter((l) => l.teacherId === t.id && (!hoursFrom || (l.date || "") >= hoursFrom) && (!hoursTo || (l.date || "") <= hoursTo)).length;
+                          return `${n} aulas${(hoursFrom || hoursTo) ? " no intervalo" : ""} · ${(n * (t.rate || 0)).toLocaleString()} AKZ`;
+                        })()}
                       </p>
                     </div>
                     <div className="flex gap-2">
