@@ -661,14 +661,6 @@ const TeacherHome = ({
                 </div>
                 <div className="flex flex-col gap-1 items-end">
                   <Badge status={prog.status} label={prog.statusLabel} colorClass={prog.colorClass} />
-                  {prog.gl && (
-                    <div className={`px-2 py-1 rounded-full text-[9px] font-black flex items-center gap-1 uppercase border ${prog.gl.colorClass}`} title={`Grammar: ${prog.gl.used}/${prog.gl.planned} dias`}>
-                      {prog.gl.status === "BEHIND" && <TrendingDown size={10} />}
-                      {prog.gl.status === "AHEAD" && <TrendingUp size={10} />}
-                      {prog.gl.status === "ON TRACK" && <CheckCircle2 size={10} />}
-                      GL · {prog.gl.statusLabel}
-                    </div>
-                  )}
                   {prog.activeBlock && (
                     <div className="px-2 py-1 rounded-full text-[9px] font-black bg-slate-100 text-slate-500 uppercase border border-slate-200 flex items-center gap-1">
                       <Map size={10} /> {prog.activeBlock.type}
