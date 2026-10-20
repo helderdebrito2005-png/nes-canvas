@@ -137,7 +137,7 @@ function parseRoster(text) {
   const rows = parseCSV(text);
   const out = []; let cur = null, parados = false;
   const isHeader = (r) => /^\d{2}h\d{2}$/i.test(String(r[1] || "").trim())
-    && /^\d+[A-Za-z]$/.test(String(r[2] || "").trim()) && String(r[3] || "").trim() !== "";
+    && /^\d+[A-Za-z]?$/.test(String(r[2] || "").trim()) && String(r[3] || "").trim() !== "";
   for (const r of rows) {
     if (isHeader(r)) {
       let professor = String(r[3]).trim();
